@@ -47,6 +47,17 @@ erDiagram
         date event_start_date "festival_event만 값 있음, 나머진 NULL"
         date event_end_date "festival_event만 값 있음, 나머진 NULL"
         timestamp synced_at
+        boolean adult_only "신규(1주차) - family_with_kids 필터용, tags[]로 표현 불가해 별도 컬럼"
+    }
+
+    CARE_FACILITIES {
+        uuid id PK
+        string region_code
+        string name
+        string category "hospital/pharmacy 등"
+        string phone "실제 서비스키 동기화 전까지 119 외 NULL"
+        float lat
+        float lng
     }
 
     ALERTS {

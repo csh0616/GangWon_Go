@@ -308,10 +308,21 @@ itineraries (활성 일정)
     #   itineraries만 스캔 대상으로 삼는다 (여행 중이 아닌 일정까지 매번 스캔하지 않기 위함)
 
 pois (장소 데이터, TourAPI/의료관광정보 동기화)
-  - id, region_code, name, category, lat, lng, tags[], event_start_date, event_end_date, synced_at
+  - id, region_code, name, category, lat, lng, tags[], event_start_date, event_end_date, synced_at,
+    adult_only
     # tags[]는 반드시 3.5절 카테고리 마스터 목록의 키만 사용 (LLM 가중치 출력과 동일한 값 체계 유지)
     # event_start_date/end_date는 festival_event 태그를 가진 row에만 값이 있음(그 외 NULL). TourAPI의
     # 축제/공연/행사 콘텐츠 타입에 이미 포함된 필드를 그대로 매핑 — 별도 API 불필요
+    # adult_only(boolean, 신규 — 1주차 백엔드 구현 중 추가): 3.5절 "family_with_kids면 성인 전용 성격
+    # POI 태그 제외" 필터용. tags[]는 7개 카테고리 키 고정이라 이 값을 태그로 표현할 수 없어 별도
+    # 컬럼으로 분리. relationship 필터가 family_with_kids일 때 이 값이 true인 POI를 후보에서 제외
+
+care_facilities (여행 케어 안내용 정적 데이터, 신규 — 1주차 백엔드 구현 중 추가)
+  - id, region_code, name, category(hospital/pharmacy 등), phone, lat, lng
+    # GET /api/care(API_CONTRACT.md §4)가 그대로 반환하는 정적 큐레이션 데이터. pois와 별개 테이블로
+    # 분리한 이유: 여행 케어 안내는 로그인/코스와 무관하게 항상 조회되는 정적 목록이라(2.1절), 코스
+    # 생성 스코어링 대상인 pois와 성격이 다름. 시드 데이터는 8장 참고 — 병원 전화번호는 119를 제외하고
+    # 실제 서비스키로 sync_medical.js 실동기화 전까지 null로 비워둠(잘못된 응급연락처 노출 방지)
 
 alerts (매니징 트리거 로그)
   - id, itinerary_id, trigger_type(weather/traffic/festival), condition, triggered_at,
@@ -377,6 +388,9 @@ alerts (매니징 트리거 로그)
 - 매니징 알림 무응답 타임아웃: 확정 — 3분 후 자동 dismissed (3.6절)
 - **Realtime 채널은 itinerary 단위로 구독한다** (`alerts:itinerary_id=eq.{id}`) — 전체 사용자에게
   브로드캐스트하지 않는다. 다른 사용자의 매니징 알림이 섞여 들어오면 안 됨 (API_CONTRACT.md §3 근거 조항)
+- **RLS (Row Level Security, 신규 — 1주차 백엔드 구현 중 추가)**: `users`/`itineraries`/`alerts`에 본인
+  소유 row만 SELECT 가능한 정책 적용. 위 Realtime 요구사항(다른 사용자 알림이 섞이면 안 됨)의 DB
+  레벨 방어선 — 애플리케이션 코드 버그로 채널 필터가 뚫려도 DB 자체가 막아줌
 - **CORS**: 백엔드(Railway/Render)는 프론트 배포 도메인(Vercel)과 로컬 개발 주소만 허용 origin으로 등록.
   구체적 도메인 값은 배포 확정 후 `.env`에 기록 (API_CONTRACT.md §0)
 
