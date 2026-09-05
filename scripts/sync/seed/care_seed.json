@@ -1,0 +1,19 @@
+[
+  { "region_code": "injae", "name": "인제군보건의료원", "category": "hospital", "phone": null, "lat": 38.0692, "lng": 128.1706 },
+  { "region_code": "injae", "name": "인제읍보건지소", "category": "clinic", "phone": null, "lat": 38.0692, "lng": 128.1706 },
+  { "region_code": "injae", "name": "남면보건지소", "category": "clinic", "phone": null, "lat": 37.9700, "lng": 128.1300 },
+  { "region_code": "injae", "name": "기린면보건지소", "category": "clinic", "phone": null, "lat": 37.9500, "lng": 128.3200 },
+  { "region_code": "injae", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null },
+
+  { "region_code": "hongcheon", "name": "홍천군보건의료원", "category": "hospital", "phone": null, "lat": 37.6960, "lng": 127.8850 },
+  { "region_code": "hongcheon", "name": "홍천읍보건지소", "category": "clinic", "phone": null, "lat": 37.6960, "lng": 127.8850 },
+  { "region_code": "hongcheon", "name": "서면보건지소", "category": "clinic", "phone": null, "lat": 37.7200, "lng": 127.7500 },
+  { "region_code": "hongcheon", "name": "내면보건지소", "category": "clinic", "phone": null, "lat": 37.7900, "lng": 128.4500 },
+  { "region_code": "hongcheon", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null },
+
+  { "region_code": "pyeongchang", "name": "평창군보건의료원", "category": "hospital", "phone": null, "lat": 37.3706, "lng": 128.3900 },
+  { "region_code": "pyeongchang", "name": "진부면보건지소", "category": "clinic", "phone": null, "lat": 37.7450, "lng": 128.5600 },
+  { "region_code": "pyeongchang", "name": "봉평면보건지소", "category": "clinic", "phone": null, "lat": 37.5980, "lng": 128.3920 },
+  { "region_code": "pyeongchang", "name": "대관령면보건지소", "category": "clinic", "phone": null, "lat": 37.6900, "lng": 128.7180 },
+  { "region_code": "pyeongchang", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null }
+]
