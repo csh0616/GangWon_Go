@@ -259,6 +259,9 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
 
 ### `POST /api/alerts/trigger` (데모 전용 강제 트리거 — "제안"만 생성)
 
+**Authorization 필요, 본인 소유 itinerary만** (백엔드팀 확정 — 계약에 명시 안 돼 있었으나, 전제 조건이
+"저장된(로그인) 일정"이라 인증 없이 호출될 수 없음). 아래 `regenerate-stop`, `respond`도 동일.
+
 라이브 데모의 "강제 트리거 버튼"이 호출. §1의 카테고리 가중치 스키마와 같은 스코어링 로직을 쓰되,
 PRD 3.5절의 "상황별 조정표"로 `preference_weights`를 먼저 보정한 뒤 후보 1개를 계산 — **여기서
 `itinerary_json`에 반영하지 않고 `alerts` row(status: proposed)만 생성**하고 Realtime push.
@@ -367,8 +370,13 @@ PRD 3.5절 "부분 재구성" 경로 중 **수동 편집 전용** 엔드포인�
 
 **Request**
 ```json
-{ "day": 2, "new_poi_id": "poi_alpensia" }
+{ "day": 2, "target_poi_id": "poi_odaesan_hiking", "new_poi_id": "poi_alpensia" }
 ```
+
+**`target_poi_id` (추가 — 백엔드팀 제안, 확정)**: 하루에 스탑이 여러 개일 때 `day`만으로는 "그 날짜의
+어느 스탑을 교체하는지" 특정할 수 없다(`regenerate-stop` 응답의 `candidates`가 상태를 들고 있지 않아
+서버가 대상을 추론할 수 없음). 원래 교체 대상이었던 스탑의 `poi_id`를 그대로 다시 보내 명시한다 —
+`regenerate-stop` 요청 때 보낸 `target_poi_id`와 동일한 값.
 
 **Response 200**
 ```json
@@ -409,6 +417,11 @@ SOS 버튼은 별도 API 호출 없이 클라이언트에서 `tel:119` 링크만
 ---
 
 ## 5. 확정 필요 (백엔드팀 결정 → 이 문서 갱신)
+
+- ~~`PATCH /api/itineraries/:id`에서 교체 대상 스탑을 특정할 방법~~ → 해결됨: `target_poi_id` 추가 (§3,
+  하루에 스탑이 여럿일 때 `day`만으로 대상 특정 불가 — 1주차 백엔드 구현 중 발견해 확정)
+- ~~`regenerate-stop`/`alerts trigger`/`alerts respond`의 인증 요구 여부~~ → 해결됨: 셋 다 Authorization
+  필수 (§3 — 저장된 일정 전제이므로 게스트 호출 불가)
 
 - ~~traffic(혼잡) 트리거의 상황별 후보 재선정 기준~~ → 해결됨: 이동시간 1시간 초과 시 트리거, 현재 위치
   기준 15분 이내 후보로 재선정 (PRD 3.5절, §3 `POST /api/alerts/trigger`)
