@@ -1,0 +1,15 @@
+{
+  "name": "gangwon-go-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "실시간 조건 감시 에이전트 (5~10분 주기, PRD 3.6절) — node-cron",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}

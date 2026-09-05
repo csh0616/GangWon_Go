@@ -1,0 +1,15 @@
+{
+  "name": "gangwon-go-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TourAPI/의료관광정보 배치 동기화 + 1주차 시드 데이터 로더 (PRD 5장/8장)",
+  "scripts": {
+    "sync:pois": "node sync_pois.js",
+    "seed:pois": "node seed_pois.js",
+    "seed:care": "node seed_care.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5"
+  }
+}
