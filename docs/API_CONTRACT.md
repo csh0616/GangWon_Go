@@ -20,6 +20,26 @@
   1주차 Express 세팅 시 `cors` 미들웨어에 허용 목록을 넣어둘 것 (PRD 6장). 실제 Vercel 도메인은 배포
   후 `HANDOFF_LOG.md`에 공유.
 
+### 0.1 에러코드 표준 (확정 — 1주차 아키텍처 점검에서 확정, 기존 §5 미정 항목 해소)
+
+모든 실패 응답은 `{ data: null, error: { code, message } }` 형태이고, `code`는 아래 목록 중 하나여야 한다.
+**목록에 없는 실패가 그대로 클라이언트에 나가면 안 된다** — 서버 내부 예외(DB 에러, 외부 API 에러 등)는
+서버 로그에만 원문을 남기고, 응답에는 `INTERNAL_ERROR`와 일반화된 메시지만 내려보낸다. Postgres/PostgREST
+원문 메시지(제약 이름, enum 타입명 등)를 그대로 노출하지 않는다.
+
+| code | HTTP | 발생 조건 |
+|---|---|---|
+| `INVALID_STRUCTURED_INPUT` | 400 | 필수값 누락/형식 오류. 날짜 형식(`YYYY-MM-DD`), `end_date >= start_date`, `region_codes` 1개, `relationship` enum, `companions >= 1`, 여행 기간 상한(10일) 검증 포함 |
+| `INVALID_LANG` | 400 | `lang`이 `en`/`zh`가 아님 |
+| `NO_POI_DATA` | 404 | 요청한 시군의 `pois`가 **0건**. 관계 필터 등으로 후보가 걸러져 비게 된 경우는 이 코드가 아니라 `NO_CANDIDATE`를 쓴다 (프론트 안내 문구가 다르기 때문) |
+| `NO_CANDIDATE` | 404 | POI는 있으나 필터(관계/축제 날짜/우천 제외/거리) 적용 후 남은 후보가 없음 |
+| `AUTH_REQUIRED` | 401 | Authorization 헤더 없음/만료/검증 실패 |
+| `FORBIDDEN` | 403 | 토큰은 유효하나 본인 소유 리소스가 아님 |
+| `NOT_FOUND` | 404 | itinerary/alert/POI id가 존재하지 않음. **본인 소유가 아닌 리소스도 존재 여부를 노출하지 않기 위해 404로 응답**한다(403 대신) |
+| `ALERT_EXPIRED` | 409 | 이미 `confirmed`/`dismissed`된 알림에 다시 응답 시도. 3분 타임아웃(PRD 3.6절)과 사용자 클릭이 경쟁하면 정상적으로 발생하는 케이스이므로 에러가 아니라 상태 충돌로 다룬다 — 프론트는 "시간이 지난 제안입니다" 안내 후 모달을 닫는다 |
+| `STOP_NOT_FOUND` | 404 | 요청한 `day`/`target_poi_id`가 해당 일정에 없음 |
+| `INTERNAL_ERROR` | 500 | 위 어디에도 해당하지 않는 서버 내부 오류 |
+
 ---
 
 ## 1. 코스 생성 (게스트 가능, 로그인 불필요)
@@ -290,7 +310,11 @@ PRD 3.5절의 "상황별 조정표"로 `preference_weights`를 먼저 보정한 
 **Response 200**: 위 Realtime payload와 동일한 alert 생성 (`alerts` insert, status: proposed → Realtime push).
 
 **중복 방지**: insert 전에 같은 `itinerary_id`+`day`+`previous_poi_id` 조합으로 `status='proposed'`인
-row가 이미 있는지 확인하고, 있으면 새로 만들지 않고 기존 alert_id를 그대로 반환한다(재-push는 하지 않음).
+row가 이미 있는지 확인하고, 있으면 새로 만들지 않고 기존 alert의 내용을 반환한다(재-push는 하지 않음).
+**이때도 응답 본문은 신규 생성 때와 완전히 동일한 형태여야 한다** — `alert_id`만 담아 보내면 안 되고,
+기존 alert row의 `previous_poi_id`/`proposed_poi_id`로 `message`와 `proposed_stop`을 다시 조립해서 채운다
+(1주차 아키텍처 점검에서 발견 — 리허설 중 강제 트리거 버튼을 두 번 누르거나, 조건 감시 cron이 먼저
+같은 알림을 만들어둔 경우 프론트가 빈 모달을 띄우게 된다).
 실제 조건 감시 에이전트(5~10분 cron, PRD 3.6절)가 이 엔드포인트와 같은 로직을 내부적으로 돌 때도 동일하게
 적용 — 그래야 조건이 계속 참인 동안 매 주기마다 중복 알림이 쌓이지 않는다 (PRD 3.5절).
 
@@ -434,8 +458,7 @@ SOS 버튼은 별도 API 호출 없이 클라이언트에서 `tel:119` 링크만
 - ~~외부 API 실패 시 폴백 UX 원칙~~ → 해결됨(PRD 6장): TourAPI는 배치 동기화 전용이라 `/generate` 요청
   시점엔 실시간 호출 자체가 없음 — 동기화 실패해도 DB엔 마지막 성공 데이터가 남아있어 자연 폴백됨.
   ~~특정 시군 `pois` 0건일 때 `/generate` 응답~~ → 해결됨: 재시도 없이 즉시 `NO_POI_DATA` 에러 반환 (§1)
-- 에러코드 표준 전반 (예: `INVALID_LANG`, `AUTH_REQUIRED`, `POI_NOT_FOUND` 등 — 전체 목록/네이밍 규칙은
-  아직 미정. `NO_POI_DATA`(§1)는 먼저 확정된 개별 사례이며, 나머지도 이 네이밍 패턴을 따를 예정)
+- ~~에러코드 표준 전반~~ → 해결됨: §0.1에 전체 목록 확정 (1주차 아키텍처 점검)
 - ~~LLM 벤더~~ → 해결됨: Claude API tool use로 확정 (PRD 3.7절). §1의 구조화 출력 스키마는 원래
   벤더 상관없이 이식 가능하게 설계돼 있었어서 이 결정으로 인한 스키마 변경은 없음
 - LLM 가중치 출력 **일관성**(같은 입력을 넣었을 때 값이 얼마나 흔들리는가) 검증 결과에 따라 `weights` 값을

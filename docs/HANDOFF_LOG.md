@@ -117,3 +117,124 @@
   - 프론트팀: `POST /api/itineraries/generate` 응답 스펙 그대로 연동 가능(스켈레톤 아님, 시드 데이터로
     실제 동작). `docs/API_CONTRACT.md`의 `PATCH` 요청 바디에 `target_poi_id`가 추가된 점 참고 부탁.
 
+
+## [2026-09-06 21:00] 전략기획팀(PM) — 1차 백엔드 아키텍처 점검 결과 + 수정 지시
+
+1주차 백엔드 결과물을 스펙 정합성 / 알고리즘 정확성 / 보안·운영 세 방향으로 교차 점검했습니다.
+아래 순서대로(P0 → P2) 수정해주세요. 각 항목의 파일:줄은 점검 시점(커밋 `ef51870`) 기준입니다.
+
+**먼저, 점검에서 문제없다고 확인된 것** (다시 손대지 마세요): Haversine 수식·2-opt 종료 조건·`pinFirst`
+동작, Supabase 토큰 검증 방식(anon 클라이언트로 GoTrue 왕복 — 로컬 디코딩 아님), `/api/itineraries/*`
+라우트의 `user_id` 스코프, 2단계 확인 흐름(trigger는 alerts row만 생성, 적용은 respond의 yes 분기에서만),
+중복 방지 키와 부분 유니크 인덱스, 3분 타임아웃이 `responded_at`을 NULL로 남기는 것, traffic 기준점 규칙,
+쿼리 파라미터화(주입 없음), CORS 설정.
+
+### P0 — 보안 (다른 작업보다 먼저)
+
+1. **`/api/alerts/*` 소유권 검사 누락 (치명적)** — `routes/alerts.js:9-16, 41-47`이 `requireAuth`만 통과시키고
+   `req.user.id`를 전혀 쓰지 않습니다. `lib/alertTrigger.js:57-62`(itinerary 조회), `:134`(alert 조회)는
+   service-role 클라이언트라 RLS도 우회되므로, 로그인한 아무나 남의 `itinerary_id`/`alert_id`만 알면
+   그 일정을 조회하고 `:170`에서 **덮어쓸 수 있습니다**. `itinerary_id`는 Realtime 채널명이라 비밀이 아닙니다.
+   → `createProposedAlert`/`respondToAlert`에 `userId`를 넘기고, itinerary 조회에 `.eq('user_id', userId)`를
+   체이닝. respond는 `alert.itinerary_id`로 itinerary를 먼저 사용자 스코프로 확인한 뒤 변경.
+   본인 소유가 아니면 `NOT_FOUND`(404, API_CONTRACT §0.1 — 존재 여부를 노출하지 않기 위해 403이 아님).
+   `routes/itineraries.js:103-110, 127-132, 170-175`가 이미 올바른 패턴이니 그대로 따라가면 됩니다.
+
+2. **`.gitignore`가 저장소에 아예 없음** — `server/README.md:32`가 `cp .env.example .env`를 안내하는데,
+   루트에 `.gitignore`가 없어 다음 `git add .` 한 번에 `SUPABASE_SERVICE_ROLE_KEY`(RLS 전부 우회하는 키)와
+   `ANTHROPIC_API_KEY`가 공개 저장소로 올라갑니다. 아직 커밋된 시크릿은 없으니 **키 발급/셋업 전에** 루트
+   `.gitignore`에 `.env`, `.env.*`(단 `.env.example` 제외), `node_modules/`를 추가해주세요.
+
+### P1 — 데모가 실제로 안 되는 것
+
+3. **Realtime 알림이 배달되지 않음** — 마이그레이션에 `alter publication supabase_realtime add table alerts;`가
+   없습니다. Supabase는 publication에 등록된 테이블만 push하므로, 프론트 구독은 SUBSCRIBED로 성공하고
+   아무것도 수신하지 못합니다(헤드라인 기능 무동작). 마이그레이션에 위 구문과
+   `alter table alerts replica identity full;`(confirmed/dismissed UPDATE 이벤트에도 `itinerary_id` 필터가
+   걸리도록) 추가.
+
+4. **날짜 계산이 UTC 기준 — KST와 9시간 어긋남** (PRD 6장에 KST 규칙 신설했습니다) —
+   `agent/src/monitor.js:11-19` `todayISO()`가 `toISOString()` 사용. 한국시간 00~09시에 전날 일정을 스캔하고,
+   당일치기 일정은 그 시간대에 감시 대상에서 통째로 빠집니다. `agent/src/weather.js:19-31`도 `getHours()`(local)와
+   `toISOString()`(UTC)을 섞어 써서 `base_date`가 1~2일 과거로 요청되고, 실패가 `monitor.js:38-41`에서
+   조용히 삼켜져 rain 트리거가 아예 안 뜹니다. 두 곳 모두 명시적 KST 변환으로 수정.
+
+5. **강제 트리거 버튼 두 번 누르면 빈 모달** — `routes/alerts.js:18-20`의 중복 경로가 `{alert_id, status, reused}`만
+   반환합니다. API_CONTRACT §3을 "중복 시에도 신규와 동일한 응답 형태"로 명확화했으니, 기존 alert row의
+   `previous_poi_id`/`proposed_poi_id`로 `message`/`proposed_stop`을 다시 조립해서 채워주세요.
+   조건 감시 cron이 같은 알림을 먼저 만들어둔 경우에도 같은 경로를 탑니다.
+
+6. **3분 타임아웃과 Yes 클릭의 경쟁이 500** — `alertTrigger.js:136-138`이 bare `Error`를 던져
+   `errorHandler.js:6`에서 500이 됩니다. 시연 중 설명이 3분을 넘긴 뒤 Yes를 누르면 발생하는 정상 케이스이니
+   `ALERT_EXPIRED`(409, API_CONTRACT §0.1)로 바꿔주세요.
+
+7. **traffic 트리거가 500 나거나 3초를 넘김** — `lib/directions.js:33-46`이 후보 POI마다 순차 HTTP 호출을 하고,
+   카카오 키 미설정/장애 시 모든 후보를 조용히 탈락시켜 `alertTrigger.js:92-94`에서 bare Error → 500이 됩니다.
+   PRD 6장 폴백 원칙("실패한 조각만 조용히 대체")과 반대입니다. → 후보 호출을 `Promise.all`로 병렬화하고,
+   **전부 실패하면 Haversine 거리 기준으로 폴백**(에러로 막지 않음). 후보가 진짜 없을 때만 `NO_CANDIDATE`(404).
+
+8. **잘못된 `itinerary_json` 하나가 감시 에이전트 전체를 멈춤** — `monitor.js:95-97`이 per-itinerary `try` 바깥이라
+   `days`가 없는 row 하나면 `tick` 전체가 중단되고, 그 뒤 일정은 매 주기 영원히 스킵됩니다.
+   → `:95-97`을 try 안으로 옮기고, `routes/itineraries.js:69`에서 `itinerary_json.days`가
+   `{day, stops[]}` 배열인지 저장 시 검증(`INVALID_STRUCTURED_INPUT`).
+
+### P2 — 조용히 틀리는 것 (실데이터 들어오면 드러남)
+
+9. **동기화 필드 케이싱 불일치** — `scripts/sync/category_mapping.js:48`은 `raw.contentTypeId`,
+   `scripts/sync/sync_pois.js:26,34-36`은 `raw.contentid/contenttypeid/mapx`를 같은 객체에서 읽습니다.
+   TourAPI `_type=json` 키는 전부 소문자라, 문서상 "가장 신뢰도 높은 신호"인 `CONTENT_TYPE_MAP`이 통째로
+   dead code입니다(cat1/cat2로만 분류되고, cat 필드가 빈 축제 로우는 조용히 누락). 케이싱 통일 필요.
+
+10. **`alerts`의 FK가 동기화와 충돌** — `0001_init_schema.sql:92-93`이 `previous_poi_id`/`proposed_poi_id`를
+    `pois(id)` 하드 FK로 잡았는데, `sync_pois.js:51-55`/`seed_pois.js:17-21`이 delete+insert로 UUID를 새로
+    발급합니다. 재동기화 후 기존 알림이 FK 위반으로 깨지고, 반대로 알림이 하나라도 있으면 그 시군 동기화가
+    막힙니다. PRD 4장 스냅샷 정책상 POI id는 참조 무결성 대상이 아니므로 **FK 제거**(또는 `content_id` 기반
+    upsert로 id 보존)가 맞습니다. `monitor.js:47`이 스냅샷 id로 `pois`를 재조회하는 것도 같은 이유로 깨집니다.
+
+11. **축제 날짜 판정** (PRD 3.5절에 일자 단위 기준 명시했습니다) — `scoring.js:77-81`은 여행 기간 전체와의
+    겹침만 보고, 일자 단위 검사(`festivalOverlapsDate`)는 앵커에만 걸려 있어 축제가 열리지 않는 날에
+    축제 스탑이 배치됩니다. 부분 재구성(`itineraries.js:148`, `alertTrigger.js:76`)에는 날짜 필터가 아예 없어
+    끝난 축제가 대체 후보 1순위로 나옵니다. 양쪽 모두 일자 기준 필터 적용.
+
+12. **rain이 야외 POI를 대체 후보로 제안 가능** (PRD 3.5절 조정표를 "가중치 0"에서 "후보 제외"로 수정했습니다) —
+    `alertAdjust.js:12-16`이 가중치만 0으로 만들어, 태그를 여러 개 가진 POI가 남은 점수로 1위가 될 수 있습니다.
+    자유텍스트 없이 만든 코스는 가중치가 전부 0이라 DB 순서대로 아무거나 뽑히기까지 합니다.
+    → 태그 기반 제외 필터를 먼저 적용하고, 가중치는 남은 후보 순위 결정에만 사용.
+
+13. **앵커 날짜가 선호도를 무시** (PRD 3.5절에 명시했습니다) — `scoring.js:103-112`가 앵커 주변을 거리순으로만
+    채우고 `__score`를 안 봅니다. 앵커 근처 POI를 먼저 소진해 다른 날 후보 품질까지 떨어뜨립니다.
+    → 가중치 스코어를 1차 기준으로 하되 앵커와의 거리를 함께 고려.
+
+14. **좌표 없는 TourAPI 로우가 (0,0)으로 저장** — `sync_pois.js:35-36`의 `Number('')`는 `0`이라
+    아프리카 앞바다 좌표가 정상 POI처럼 삽입되고, 코스에 ~11,000km 구간이 생깁니다. 삽입 전 좌표 유효성
+    검증(위경도 범위, NaN) 후 제외 + 로그.
+
+15. **`sync_pois`의 delete+insert가 비원자적** — `sync_pois.js:51-55`에서 DELETE는 커밋되고 INSERT가 실패하면
+    그 시군 POI가 0건이 됩니다(주석의 "마지막 성공 데이터 유지" 설명과 반대). upsert 또는 트랜잭션/스테이징
+    테이블 방식으로 변경.
+
+16. **auth 미들웨어의 unhandled rejection** — `middleware/auth.js:11-24`가 async인데 try/catch 없이 Express 4에
+    넘겨져, Supabase 도달 실패 시 응답 없이 프로세스가 죽습니다(Node 15+ 기본값). try/catch → `next(err)`.
+
+17. **날짜 형식 미검증** — `routes/itineraries.js:27`이 존재 여부만 봐서 `2026-13-45` 같은 값이
+    `scoring.js:19-24`에서 NaN이 되고 **빈 일정이 200으로 반환**됩니다. `end_date < start_date`도 조용히
+    1일로 collapse됩니다. API_CONTRACT §0.1의 `INVALID_STRUCTURED_INPUT` 조건대로 검증(형식, 순서, 10일 상한).
+
+18. **기타 계약 불일치**: `regenerate-stop`에서 LLM 실패 시 저장된 `preference_weights`로 폴백해야 하는데
+    전부 0을 씁니다(`itineraries.js:137-140`) — 전부 0 폴백은 §1 `/generate` 전용입니다.
+    `respondToAlert`가 `alert` 전체 row를 응답에 실어 보냅니다(`alertTrigger.js:181`, 계약은 `{status, updated_stop}`).
+    `PATCH`가 `target_poi_id`가 안 맞아도 `day_reordered:true`로 200을 반환합니다(`itineraries.js:183-191` →
+    `STOP_NOT_FOUND` 404). 알림 문구가 서버에 하드코딩돼 있습니다(`alertTrigger.js:14-34`, PRD 6장 다국어 규칙 —
+    키+치환값 형태로 변경). `lang`이 검증만 되고 사용되지 않으며 `users.preferred_lang`이 기록되지 않습니다.
+
+### 시드 데이터
+
+`pois_seed.json`에 `adult_only: true`인 로우가 0건이라 `family_with_kids` 필터가 검증 불가능하고,
+`festival_event`가 평창 1건뿐이라 앵커 배치도 평창에서만 시연됩니다. 각각 2~3건씩 추가해주세요.
+평창 효석문화제의 2026년 실제 개최 일정은 여전히 미확인 상태입니다(리허설 전 확인 필요).
+
+- 블로커: 없음 (위 수정은 전부 서비스키 없이 진행 가능. 실동기화 검증만 키 발급 이후로 남습니다)
+- 다음 액션:
+  - 백엔드: P0 → P1 → P2 순서로 수정 후 `feat/backend-fixes-round1` 브랜치로 PR. 수정 완료분은 이 로그에 append.
+  - PM: 수정 PR 올라오면 재점검. QA팀 세션 시작 시 TEST_PLAN에 위 항목별 회귀 테스트 케이스 추가 예정.
+  - 승현님: Supabase 프로젝트 + Google OAuth, 서비스키 4종(TourAPI/의료관광정보/기상청/카카오모빌리티) 발급.
