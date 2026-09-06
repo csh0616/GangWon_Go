@@ -1,19 +1,19 @@
 [
-  { "region_code": "injae", "name": "인제군보건의료원", "category": "hospital", "phone": null, "lat": 38.0692, "lng": 128.1706 },
-  { "region_code": "injae", "name": "인제읍보건지소", "category": "clinic", "phone": null, "lat": 38.0692, "lng": 128.1706 },
-  { "region_code": "injae", "name": "남면보건지소", "category": "clinic", "phone": null, "lat": 37.9700, "lng": 128.1300 },
-  { "region_code": "injae", "name": "기린면보건지소", "category": "clinic", "phone": null, "lat": 37.9500, "lng": 128.3200 },
-  { "region_code": "injae", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null },
+  { "content_id": "seed-care-injae-001", "region_code": "injae", "name_en": "Inje County Public Health Medical Center", "name_zh": "麟蹄郡保健医疗院", "category": "hospital", "phone": null, "address_en": "Injae-eup, Injae-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道麟蹄郡麟蹄邑", "lat": 38.0692, "lng": 128.1706 },
+  { "content_id": "seed-care-injae-002", "region_code": "injae", "name_en": "Injae-eup Health Clinic", "name_zh": "麟蹄邑保健支所", "category": "clinic", "phone": null, "address_en": "Injae-eup, Injae-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道麟蹄郡麟蹄邑", "lat": 38.0692, "lng": 128.1706 },
+  { "content_id": "seed-care-injae-003", "region_code": "injae", "name_en": "Nam-myeon Health Clinic", "name_zh": "南面保健支所", "category": "clinic", "phone": null, "address_en": "Nam-myeon, Injae-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道麟蹄郡南面", "lat": 37.9700, "lng": 128.1300 },
+  { "content_id": "seed-care-injae-004", "region_code": "injae", "name_en": "Girin-myeon Health Clinic", "name_zh": "麒麟面保健支所", "category": "clinic", "phone": null, "address_en": "Girin-myeon, Injae-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道麟蹄郡麒麟面", "lat": 37.9500, "lng": 128.3200 },
+  { "content_id": "seed-care-injae-005", "region_code": "injae", "name_en": "Emergency (119)", "name_zh": "急救(119)", "category": "emergency", "phone": "119", "address_en": null, "address_zh": null, "lat": null, "lng": null },
 
-  { "region_code": "hongcheon", "name": "홍천군보건의료원", "category": "hospital", "phone": null, "lat": 37.6960, "lng": 127.8850 },
-  { "region_code": "hongcheon", "name": "홍천읍보건지소", "category": "clinic", "phone": null, "lat": 37.6960, "lng": 127.8850 },
-  { "region_code": "hongcheon", "name": "서면보건지소", "category": "clinic", "phone": null, "lat": 37.7200, "lng": 127.7500 },
-  { "region_code": "hongcheon", "name": "내면보건지소", "category": "clinic", "phone": null, "lat": 37.7900, "lng": 128.4500 },
-  { "region_code": "hongcheon", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null },
+  { "content_id": "seed-care-hongcheon-001", "region_code": "hongcheon", "name_en": "Hongcheon County Public Health Medical Center", "name_zh": "洪川郡保健医疗院", "category": "hospital", "phone": null, "address_en": "Hongcheon-eup, Hongcheon-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道洪川郡洪川邑", "lat": 37.6960, "lng": 127.8850 },
+  { "content_id": "seed-care-hongcheon-002", "region_code": "hongcheon", "name_en": "Hongcheon-eup Health Clinic", "name_zh": "洪川邑保健支所", "category": "clinic", "phone": null, "address_en": "Hongcheon-eup, Hongcheon-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道洪川郡洪川邑", "lat": 37.6960, "lng": 127.8850 },
+  { "content_id": "seed-care-hongcheon-003", "region_code": "hongcheon", "name_en": "Seo-myeon Health Clinic", "name_zh": "西面保健支所", "category": "clinic", "phone": null, "address_en": "Seo-myeon, Hongcheon-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道洪川郡西面", "lat": 37.7200, "lng": 127.7500 },
+  { "content_id": "seed-care-hongcheon-004", "region_code": "hongcheon", "name_en": "Nae-myeon Health Clinic", "name_zh": "内面保健支所", "category": "clinic", "phone": null, "address_en": "Nae-myeon, Hongcheon-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道洪川郡内面", "lat": 37.7900, "lng": 128.4500 },
+  { "content_id": "seed-care-hongcheon-005", "region_code": "hongcheon", "name_en": "Emergency (119)", "name_zh": "急救(119)", "category": "emergency", "phone": "119", "address_en": null, "address_zh": null, "lat": null, "lng": null },
 
-  { "region_code": "pyeongchang", "name": "평창군보건의료원", "category": "hospital", "phone": null, "lat": 37.3706, "lng": 128.3900 },
-  { "region_code": "pyeongchang", "name": "진부면보건지소", "category": "clinic", "phone": null, "lat": 37.7450, "lng": 128.5600 },
-  { "region_code": "pyeongchang", "name": "봉평면보건지소", "category": "clinic", "phone": null, "lat": 37.5980, "lng": 128.3920 },
-  { "region_code": "pyeongchang", "name": "대관령면보건지소", "category": "clinic", "phone": null, "lat": 37.6900, "lng": 128.7180 },
-  { "region_code": "pyeongchang", "name": "응급의료(119)", "category": "emergency", "phone": "119", "lat": null, "lng": null }
+  { "content_id": "seed-care-pyeongchang-001", "region_code": "pyeongchang", "name_en": "Pyeongchang County Public Health Medical Center", "name_zh": "平昌郡保健医疗院", "category": "hospital", "phone": null, "address_en": "Pyeongchang-eup, Pyeongchang-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道平昌郡平昌邑", "lat": 37.3706, "lng": 128.3900 },
+  { "content_id": "seed-care-pyeongchang-002", "region_code": "pyeongchang", "name_en": "Jinbu-myeon Health Clinic", "name_zh": "珍富面保健支所", "category": "clinic", "phone": null, "address_en": "Jinbu-myeon, Pyeongchang-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道平昌郡珍富面", "lat": 37.7450, "lng": 128.5600 },
+  { "content_id": "seed-care-pyeongchang-003", "region_code": "pyeongchang", "name_en": "Bongpyeong-myeon Health Clinic", "name_zh": "蓬坪面保健支所", "category": "clinic", "phone": null, "address_en": "Bongpyeong-myeon, Pyeongchang-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道平昌郡蓬坪面", "lat": 37.5980, "lng": 128.3920 },
+  { "content_id": "seed-care-pyeongchang-004", "region_code": "pyeongchang", "name_en": "Daegwallyeong-myeon Health Clinic", "name_zh": "大关岭面保健支所", "category": "clinic", "phone": null, "address_en": "Daegwallyeong-myeon, Pyeongchang-gun, Gangwon-do, South Korea", "address_zh": "韩国江原道平昌郡大关岭面", "lat": 37.6900, "lng": 128.7180 },
+  { "content_id": "seed-care-pyeongchang-005", "region_code": "pyeongchang", "name_en": "Emergency (119)", "name_zh": "急救(119)", "category": "emergency", "phone": "119", "address_en": null, "address_zh": null, "lat": null, "lng": null }
 ]

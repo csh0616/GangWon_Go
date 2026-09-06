@@ -16,11 +16,16 @@ async function main() {
   const regionCodes = [...new Set(rows.map((r) => r.region_code))];
   const syncStartedAt = new Date().toISOString();
 
-  // INSERT 먼저, 성공한 뒤에만 이전 데이터 DELETE (sync_pois.js와 동일 패턴, 1주차 점검 #15)
-  const { error: insertErr } = await supabase.from('pois').insert(rows.map((r) => ({ ...r, synced_at: syncStartedAt })));
-  if (insertErr) throw insertErr;
+  // content_id 기준 upsert (sync_pois.js와 동일 패턴, 라운드2 점검 #4) — 시드도 같은 규칙을 따라야
+  // 실제 TourAPI 동기화로 자연스럽게 넘어갈 때 id 안정성이 끊기지 않는다.
+  const { error: upsertErr } = await supabase.from('pois').upsert(
+    rows.map((r) => ({ ...r, synced_at: syncStartedAt })),
+    { onConflict: 'content_id' }
+  );
+  if (upsertErr) throw upsertErr;
 
-  const { error: deleteErr } = await supabase.from('pois').delete().in('region_code', regionCodes).lt('synced_at', syncStartedAt);
+  // 0001 시절 content_id 없이 들어간 레거시 로우 정리 (해당 region만)
+  const { error: deleteErr } = await supabase.from('pois').delete().in('region_code', regionCodes).is('content_id', null);
   if (deleteErr) throw deleteErr;
 
   console.log(`[seed_pois] ${rows.length}건 시드 완료 (${regionCodes.join(', ')})`);

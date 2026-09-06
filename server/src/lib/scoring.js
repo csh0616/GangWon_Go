@@ -87,6 +87,14 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
   const scored = pool.map((p) => ({ ...p, __score: scorePoi(p, weights) }));
   const usedIds = new Set();
 
+  // festival_event 후보는 "일자 검사만 통과하면 배치 가능" — 가중치(__score) 조건을 걸면 안 된다
+  // (라운드2 점검 #1). free_text 없이 생성하면 가중치가 전부 0이라(API_CONTRACT §1) 예전 코드의
+  // `__score > 0` 게이트에 항상 걸려서 개최일이 맞는 축제도 코스에 못 들어갔다.
+  function isDateEligible(poi, date) {
+    if (!(poi.tags || []).includes('festival_event')) return true;
+    return festivalOverlapsDate(poi, date);
+  }
+
   const dayPlans = [];
   for (let i = 0; i < numDays; i += 1) {
     const date = dateForDayIndex(startDate, i);
@@ -94,23 +102,24 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
       .filter((p) => !usedIds.has(p.id))
       .filter((p) => (p.tags || []).includes('festival_event'))
       .filter((p) => festivalOverlapsDate(p, date))
-      .filter((p) => p.__score > 0)
       .sort((a, b) => b.__score - a.__score)[0] || null;
 
     if (anchor) usedIds.add(anchor.id);
     dayPlans.push({ date, anchor, slots: maxPerDay - (anchor ? 1 : 0), picked: [] });
   }
 
-  // 앵커로 뽑히지 않은 festival_event POI는 일반 스탑 풀에서 완전히 제외한다 (1주차 아키텍처 점검 #11) —
-  // 그렇지 않으면 일반 배치 경로가 날짜 겹침을 검사하지 않아 "축제가 열리지 않는 날"에 배치될 수 있다.
-  let freePool = scored.filter((p) => !usedIds.has(p.id) && !(p.tags || []).includes('festival_event'));
+  // 앵커에 못 든 festival_event도 일반 스탑 풀에서 완전히 제외하지 않는다 (라운드2 점검 #1) —
+  // 그 날짜와 맞기만 하면 일반 경로로도 배치될 수 있어야 한다. 대신 각 배치 단계에서
+  // isDateEligible()로 "그 날짜가 아닌 축제"만 걸러낸다.
+  let freePool = scored.filter((p) => !usedIds.has(p.id));
 
   // 앵커가 있는 날: "그 주변으로 클러스터링"이되 가중치 스코어를 1차 기준으로, 거리는 함께 고려한다
   // (1주차 아키텍처 점검 #13 — 거리만 보면 사용자 취향이 그 날 통째로 무시되고, 앵커 근처 POI가
   // 먼저 소진돼 다른 날 후보 품질까지 떨어졌다).
   dayPlans.forEach((dp) => {
     if (!dp.anchor) return;
-    const withDistance = freePool.map((p) => ({ ...p, __distanceToAnchor: haversineKm(dp.anchor, p) }));
+    const eligible = freePool.filter((p) => isDateEligible(p, dp.date));
+    const withDistance = eligible.map((p) => ({ ...p, __distanceToAnchor: haversineKm(dp.anchor, p) }));
     const maxDist = Math.max(1e-6, ...withDistance.map((p) => p.__distanceToAnchor));
     const ranked = withDistance
       .map((p) => ({ ...p, __combined: p.__score - ANCHOR_DISTANCE_PENALTY_WEIGHT * (p.__distanceToAnchor / maxDist) }))
@@ -121,30 +130,47 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
     freePool = freePool.filter((p) => !pickedIds.has(p.id));
   });
 
-  // 앵커 없는 날들: 점수 상위 후보를 지리적으로 k-means 클러스터링 후 배분
+  // 앵커 없는 날들: 점수 상위 후보를 지리적으로 k-means 클러스터링 후 배분.
+  // k-means는 날짜를 모르므로 클러스터링 자체에는 festival_event를 넣지 않고(지리적 편향 방지),
+  // 클러스터→날짜 배정 이후 단계에서 isDateEligible()로 걸러 leftover로 넘긴다.
   const nonAnchorDays = dayPlans.filter((dp) => !dp.anchor);
   const totalNonAnchorSlots = nonAnchorDays.reduce((sum, dp) => sum + dp.slots, 0);
-  const topPool = freePool.slice().sort((a, b) => b.__score - a.__score).slice(0, totalNonAnchorSlots);
+  const topPool = freePool
+    .filter((p) => !(p.tags || []).includes('festival_event'))
+    .sort((a, b) => b.__score - a.__score)
+    .slice(0, totalNonAnchorSlots);
+  const festivalLeftover = freePool.filter((p) => (p.tags || []).includes('festival_event'));
   const clusters = kMeansCluster(topPool, Math.max(nonAnchorDays.length, 1));
 
-  let leftover = [];
+  let leftover = festivalLeftover.slice();
   nonAnchorDays.forEach((dp, idx) => {
     const cluster = (clusters[idx] || []).slice().sort((a, b) => b.__score - a.__score);
     dp.picked = cluster.slice(0, dp.slots);
     leftover = leftover.concat(cluster.slice(dp.slots));
   });
   nonAnchorDays.forEach((dp) => {
-    while (dp.picked.length < dp.slots && leftover.length > 0) {
+    // eslint-disable-next-line no-constant-condition
+    while (dp.picked.length < dp.slots) {
       leftover.sort((a, b) => b.__score - a.__score);
-      dp.picked.push(leftover.shift());
+      const idx = leftover.findIndex((p) => isDateEligible(p, dp.date));
+      if (idx === -1) break; // 남은 leftover 중 이 날짜에 맞는 게 없음
+      dp.picked.push(leftover[idx]);
+      leftover.splice(idx, 1);
     }
   });
 
-  return dayPlans.map((dp, idx) => {
-    const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
-    const ordered = twoOptOptimize(stops, { pinFirst: !!dp.anchor });
-    return { day: idx + 1, stops: ordered.map((p, i) => toStopShape(p, i + 1)) };
-  });
+  // 스탑이 0개인 날은 만들지 않는다 (라운드2 점검 #2) — POI가 얇은 시군에서 긴 일정을 만들면
+  // 생기는데, 그대로 저장하면 validators.js의 itinerary_json 검증(day당 stops>=1)에 걸려 200으로
+  // 받은 코스를 저장할 때 400이 나는 모순이 있었다. day 번호는 갱기지 않고(달력 날짜와의 대응 유지)
+  // 스탑 없는 날만 건너뛴다.
+  return dayPlans
+    .map((dp, idx) => {
+      const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
+      if (stops.length === 0) return null;
+      const ordered = twoOptOptimize(stops, { pinFirst: !!dp.anchor });
+      return { day: idx + 1, stops: ordered.map((p, i) => toStopShape(p, i + 1)) };
+    })
+    .filter(Boolean);
 }
 
 /**

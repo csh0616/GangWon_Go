@@ -1,9 +1,9 @@
 // 기상청 단기예보 API(getVilageFcst) 클라이언트 (PRD 3.6절 — 5~10분 주기 매니징 트리거용).
 //
-// 블로커: 기상청 API는 위경도가 아니라 격자 좌표(nx/ny)를 쓴다. 인제/홍천/평창 세 시군의 정확한
-// 격자값은 기상청이 제공하는 "동네예보 격자 좌표 변환기"로 직접 조회해야 하고, 이 세션은 실제
-// 서비스키/네트워크가 없어 검증하지 못했다 — 아래 GRID를 채우기 전엔 fetchRainStatus가 명시적으로
-// 에러를 던진다 (틀린 좌표로 조용히 엉뚱한 지역 날씨를 가져오는 것을 막기 위함). docs/HANDOFF_LOG.md 참고.
+// 기상청 API는 위경도가 아니라 격자 좌표(nx/ny)를 쓴다. REGION_GRID는 시군 대표 좌표를
+// kmaGrid.js의 공식(LCC 변환)으로 계산한 값이며(1주차 아키텍처 점검 이후 반영, 서울시청
+// 기준점(60,127)/부산·대전·제주 교차검증 통과), 실제 서비스키로 최초 호출해 응답이 정상 오는지
+// 검증은 TourAPI/기상청 서버 장애로 아직 못 했다 (docs/HANDOFF_LOG.md 2026-09-07 00:30 항목).
 require('dotenv').config();
 const path = require('path');
 const { todayKstYYYYMMDD, nowKstHourMinute } = require(path.join(__dirname, '../../server/src/lib/time'));

@@ -48,6 +48,15 @@ async function checkRain(itinerary, dayEntry) {
     console.warn('[monitor] 스탑 태그 조회 실패, 이번 주기는 건너뜀:', poiErr.message);
     return;
   }
+  // poiRows가 0건이면 조용히 넘어가지 않는다 (라운드2 점검 #4) — poi_id가 최신 pois와 하나도 안
+  // 맞는다는 뜻이라, 재동기화가 content_id 기반 upsert 없이 돌아서 uuid가 갈렸을 가능성이 높다.
+  // 에러가 아니라 정상 응답(빈 배열)이라 poiErr로는 안 걸러지므로 여기서 별도로 경고를 남긴다.
+  if (poiRows.length === 0) {
+    console.warn(
+      `[monitor] itinerary ${itinerary.id} day ${dayEntry.day}: pois 재조회 결과 0건 — poi_id가 최신 pois와 하나도 안 맞습니다 (재동기화가 content_id 기반 upsert로 됐는지 확인 필요).`
+    );
+    return;
+  }
   const tagsById = new Map(poiRows.map((p) => [p.id, p.tags || []]));
   const target = dayEntry.stops.find((s) => (tagsById.get(s.poi_id) || []).some((tag) => RAIN_TAGS.includes(tag)));
   if (!target) return;
