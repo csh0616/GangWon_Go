@@ -1,51 +1,58 @@
-// PRD 5장 — 의료관광정보 서비스 배치 동기화 (여행 케어 안내용 병원/응급 데이터).
-//
-// 블로커 (docs/HANDOFF_LOG.md 참고): 공공데이터포털 "의료관광정보 서비스" API는 서비스키 발급 전이라
-// 실제 응답 스키마를 이 세션에서 확인하지 못했다. 아래는 TourAPI류 공공데이터 API의 공통 관례
-// (serviceKey/MobileOS/_type 쿼리, response.body.items.item 배열)를 따른 자리표시자 구조이며,
-// 서비스키 발급 후 실제 응답 필드명(병원명/전화번호/좌표 등)에 맞춰 매핑 부분만 수정하면 된다.
+// PRD 5장 — 의료관광정보 서비스(MdclTursmService) 배치 동기화. 실행: `node sync_medical.js`
+// (MEDICAL_TOURISM_SERVICE_KEY 필요, 사용 전 ldong_lookup.js로 medical_client.js의
+// REGION_TO_LDONG을 먼저 채워야 함). 스펙은 docs/HANDOFF_LOG.md 2026-09-07 00:30 항목
+// (공식 매뉴얼 v4.1 기준, "추측 금지")을 그대로 구현 — 라운드1의 자리표시자 버전을 전면 교체.
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
+const { fetchAreaBasedList } = require('./medical_client');
 
-const BASE_URL = process.env.MEDICAL_TOURISM_BASE_URL || 'https://apis.data.go.kr/B551011/MedicalTourismService';
-const SERVICE_KEY = process.env.MEDICAL_TOURISM_SERVICE_KEY;
+const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
+async function syncRegion(regionCode) {
+  // langDivCd는 ENG/JPN/CHS/RUS만 있고 한국어가 없다(PM 확정) — ENG·CHS 두 번 호출해
+  // contentId 기준으로 같은 row에 합친다.
+  const [enItems, zhItems] = await Promise.all([fetchAreaBasedList(regionCode, 'ENG'), fetchAreaBasedList(regionCode, 'CHS')]);
 
-async function fetchMedicalFacilities(regionCode) {
-  if (!SERVICE_KEY) {
-    throw new Error('MEDICAL_TOURISM_SERVICE_KEY가 설정되지 않았습니다 — 공공데이터포털에서 발급 필요.');
-  }
-  const query = new URLSearchParams({
-    serviceKey: SERVICE_KEY,
-    MobileOS: 'ETC',
-    MobileApp: 'GangwonGo',
-    _type: 'json',
-    numOfRows: '50',
-    // TODO: 실제 API의 지역 필터 파라미터명 확인 후 교체 (areaCode/sigunguCode 방식일 가능성 높음)
-    keyword: regionCode,
+  const byContentId = new Map();
+  enItems.forEach((raw) => {
+    byContentId.set(raw.contentId, {
+      content_id: raw.contentId,
+      name_en: raw.title || null,
+      address_en: raw.baseAddr || null,
+      phone: raw.tel || null,
+      lat: raw.mapY ? Number(raw.mapY) : null,
+      lng: raw.mapX ? Number(raw.mapX) : null,
+    });
   });
-  const res = await fetch(`${BASE_URL}/getMedicalInstitutionList?${query.toString()}`);
-  if (!res.ok) throw new Error(`의료관광정보 API 호출 실패: HTTP ${res.status}`);
-  const json = await res.json();
-  const items = json?.response?.body?.items?.item;
-  return items ? (Array.isArray(items) ? items : [items]) : [];
-}
+  zhItems.forEach((raw) => {
+    const existing = byContentId.get(raw.contentId) || {
+      content_id: raw.contentId,
+      phone: raw.tel || null,
+      lat: raw.mapY ? Number(raw.mapY) : null,
+      lng: raw.mapX ? Number(raw.mapX) : null,
+    };
+    existing.name_zh = raw.title || null;
+    existing.address_zh = raw.baseAddr || null;
+    byContentId.set(raw.contentId, existing);
+  });
 
-async function syncRegion(regionCode, syncStartedAt) {
-  const items = await fetchMedicalFacilities(regionCode);
-  const rows = items.map((raw) => ({
+  const rows = Array.from(byContentId.values()).map((r) => ({
+    content_id: r.content_id,
     region_code: regionCode,
-    name: raw.name || raw.institutionName, // TODO: 실제 필드명 확인
+    name_en: r.name_en || null,
+    name_zh: r.name_zh || null,
+    // 응답에 시설 종류 구분이 없다(PM 확정) — 일단 hospital 고정, 필요해지면 /detailMdclTursm으로 보강
     category: 'hospital',
-    phone: raw.telNo || raw.phone || null, // TODO: 실제 필드명 확인
-    lat: raw.latitude ? Number(raw.latitude) : null,
-    lng: raw.longitude ? Number(raw.longitude) : null,
-    synced_at: syncStartedAt,
+    phone: r.phone,
+    address_en: r.address_en || null,
+    address_zh: r.address_zh || null,
+    lat: r.lat,
+    lng: r.lng,
+    synced_at: new Date().toISOString(),
   }));
 
   if (rows.length === 0) {
@@ -53,18 +60,19 @@ async function syncRegion(regionCode, syncStartedAt) {
     return;
   }
 
-  // INSERT 먼저, 성공한 뒤에만 이전 데이터 DELETE (sync_pois.js와 동일 패턴, 1주차 점검 #15 —
-  // 실패 시 "마지막 성공 데이터 유지" 원칙을 실제로 지키기 위함).
-  const { error: insertErr } = await supabase.from('care_facilities').insert(rows);
-  if (insertErr) throw insertErr;
+  // content_id 기준 upsert (pois의 content_id upsert와 동일 원칙, 라운드2 점검 #4)
+  const { error: upsertErr } = await supabase.from('care_facilities').upsert(rows, { onConflict: 'content_id' });
+  if (upsertErr) throw upsertErr;
 
-  const { error: deleteErr } = await supabase
+  // 이 API가 채우는 건 category='hospital'뿐이다. seed_care.js가 채운 clinic/emergency 픽스처는
+  // 건드리지 않고, 0001/구버전 시절 content_id 없이 들어간 hospital 레거시 로우만 정리한다.
+  const { error: cleanupErr } = await supabase
     .from('care_facilities')
     .delete()
     .eq('region_code', regionCode)
     .eq('category', 'hospital')
-    .lt('synced_at', syncStartedAt);
-  if (deleteErr) throw deleteErr;
+    .is('content_id', null);
+  if (cleanupErr) throw cleanupErr;
 
   console.log(`[sync_medical] ${regionCode}: ${rows.length}건 동기화 완료`);
 }
@@ -72,11 +80,12 @@ async function syncRegion(regionCode, syncStartedAt) {
 async function main() {
   for (const regionCode of REGION_CODES) {
     try {
-      const syncStartedAt = new Date().toISOString();
       // eslint-disable-next-line no-await-in-loop
-      await syncRegion(regionCode, syncStartedAt);
+      await syncRegion(regionCode);
     } catch (err) {
-      console.error(`[sync_medical] ${regionCode} 동기화 실패:`, err.message);
+      // err.cause까지 로깅 — err.message만 찍으면 네트워크 계열 실패는 "fetch failed"만 보여서
+      // 진단이 안 된다 (라운드2 점검 #8).
+      console.error(`[sync_medical] ${regionCode} 동기화 실패:`, err.message, err.cause ? `| cause: ${err.cause}` : '');
     }
   }
 }

@@ -24,6 +24,10 @@ const MESSAGE_KEY_BY_CONDITION = {
   festival_cancelled: 'alert.festival_cancelled',
 };
 
+// DB의 alert_trigger_type enum과 동일 — 라우트가 잘못된 값을 걸러내는 데 사용 (라운드2 점검 #7).
+const ALLOWED_TRIGGER_TYPES = ['weather', 'traffic', 'festival'];
+const ALLOWED_CONDITIONS = Object.keys(MESSAGE_KEY_BY_CONDITION);
+
 function buildMessagePayload(condition, previousName, candidateName) {
   return {
     key: MESSAGE_KEY_BY_CONDITION[condition] || 'alert.generic',
@@ -192,8 +196,10 @@ async function respondToAlert({ alertId, userId, response }) {
     return { status: 'dismissed' };
   }
 
-  const { data: candidatePoi, error: poiErr } = await supabaseAdmin.from('pois').select('*').eq('id', alert.proposed_poi_id).single();
+  // .single()이면 존재하지 않는 poi_id일 때 500이 난다 — §0.1 기준 404 NOT_FOUND가 맞다 (라운드2 점검 #6)
+  const { data: candidatePoi, error: poiErr } = await supabaseAdmin.from('pois').select('*').eq('id', alert.proposed_poi_id).maybeSingle();
   if (poiErr) throw poiErr;
+  if (!candidatePoi) throw apiError(404, 'NOT_FOUND', '대체 후보 POI를 찾을 수 없습니다.');
 
   const days = itinerary.itinerary_json.days.map((d) => {
     if (d.day !== alert.day) return d;
@@ -237,4 +243,4 @@ async function dismissExpiredProposals() {
   return data;
 }
 
-module.exports = { createProposedAlert, respondToAlert, dismissExpiredProposals };
+module.exports = { createProposedAlert, respondToAlert, dismissExpiredProposals, ALLOWED_TRIGGER_TYPES, ALLOWED_CONDITIONS };

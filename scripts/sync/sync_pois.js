@@ -25,7 +25,7 @@ function isValidKoreaCoord(lat, lng) {
   );
 }
 
-async function syncRegion(regionCode, syncStartedAt) {
+async function syncRegion(regionCode) {
   const rawItems = await fetchAreaBasedList(regionCode);
   const rows = [];
 
@@ -56,6 +56,7 @@ async function syncRegion(regionCode, syncStartedAt) {
     }
 
     rows.push({
+      content_id: raw.contentid,
       region_code: regionCode,
       name: raw.title,
       category: raw.cat3 || raw.cat2 || raw.cat1 || 'unknown',
@@ -64,7 +65,7 @@ async function syncRegion(regionCode, syncStartedAt) {
       tags: [tag],
       event_start_date: eventStartDate,
       event_end_date: eventEndDate,
-      synced_at: syncStartedAt,
+      synced_at: new Date().toISOString(),
     });
   }
 
@@ -73,15 +74,16 @@ async function syncRegion(regionCode, syncStartedAt) {
     return;
   }
 
-  // 먼저 INSERT하고, 성공한 뒤에만 이 실행 이전(synced_at < syncStartedAt) 데이터를 DELETE한다
-  // (1주차 점검 #15 — 기존엔 DELETE가 먼저 커밋되고 INSERT가 실패하면 그 시군 POI가 0건이 되어
-  // "실패 시 마지막 성공 데이터 유지" 원칙과 반대로 동작했다). INSERT가 실패하면 DELETE 자체가
-  // 실행되지 않아 기존 데이터가 그대로 남는다.
-  const { error: insertErr } = await supabase.from('pois').insert(rows);
-  if (insertErr) throw insertErr;
+  // content_id 기준 upsert (라운드2 점검 #4) — id(uuid)가 재동기화 후에도 유지된다. 예전 delete+insert
+  // 방식은 매번 새 uuid를 발급해서, itinerary_json 스냅샷의 옛 poi_id로 매니징 에이전트가 pois를
+  // 재조회하면 0건이 되고 rain 트리거가 로그 한 줄 없이 영구 무동작이 되는 문제가 있었다.
+  const { error: upsertErr } = await supabase.from('pois').upsert(rows, { onConflict: 'content_id' });
+  if (upsertErr) throw upsertErr;
 
-  const { error: deleteErr } = await supabase.from('pois').delete().eq('region_code', regionCode).lt('synced_at', syncStartedAt);
-  if (deleteErr) throw deleteErr;
+  // 0001 스키마 시절(content_id 없음) 또는 이전 delete+insert 잔여로 남은 이 지역의 NULL-content_id
+  // 로우 정리 — 위 upsert와 별개 로우라 자동으로 안 없어진다.
+  const { error: cleanupErr } = await supabase.from('pois').delete().eq('region_code', regionCode).is('content_id', null);
+  if (cleanupErr) throw cleanupErr;
 
   console.log(`[sync_pois] ${regionCode}: ${rows.length}건 동기화 완료`);
 }
@@ -89,13 +91,14 @@ async function syncRegion(regionCode, syncStartedAt) {
 async function main() {
   for (const regionCode of REGION_CODES) {
     try {
-      const syncStartedAt = new Date().toISOString();
       // eslint-disable-next-line no-await-in-loop
-      await syncRegion(regionCode, syncStartedAt);
+      await syncRegion(regionCode);
     } catch (err) {
-      // PRD 6장 — 배치 동기화 실패는 사용자 화면에 직접 노출되는 실패가 아님. INSERT-then-DELETE
-      // 순서 덕에 실패해도 DB의 마지막 성공 데이터가 그대로 남는다. 실패만 기록하고 다음 지역 계속 진행.
-      console.error(`[sync_pois] ${regionCode} 동기화 실패:`, err.message);
+      // PRD 6장 — 배치 동기화 실패는 사용자 화면에 직접 노출되는 실패가 아님. upsert 방식이라
+      // 실패해도 기존 로우가 그대로 남는다. err.cause까지 로깅 — err.message만 찍으면 네트워크
+      // 계열 실패는 "fetch failed"만 보여서 진단이 안 된다(이번 TourAPI 장애 진단이 반나절 걸린
+      // 직접적 원인, 라운드2 점검 #8). 실패만 기록하고 다음 지역 계속 진행.
+      console.error(`[sync_pois] ${regionCode} 동기화 실패:`, err.message, err.cause ? `| cause: ${err.cause}` : '');
     }
   }
 }

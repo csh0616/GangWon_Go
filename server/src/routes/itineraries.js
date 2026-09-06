@@ -233,8 +233,10 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
       throw apiError(404, 'STOP_NOT_FOUND', `target_poi_id를 day ${day}에서 찾을 수 없습니다.`);
     }
 
-    const { data: newPoi, error: poiErr } = await supabaseAdmin.from('pois').select('*').eq('id', newPoiId).single();
+    // .single()이면 존재하지 않는 new_poi_id일 때 500이 난다 — §0.1 기준 404 NOT_FOUND가 맞다 (라운드2 점검 #6)
+    const { data: newPoi, error: poiErr } = await supabaseAdmin.from('pois').select('*').eq('id', newPoiId).maybeSingle();
     if (poiErr) throw poiErr;
+    if (!newPoi) throw apiError(404, 'NOT_FOUND', '새 POI를 찾을 수 없습니다.');
 
     const days = itinerary.itinerary_json.days.map((d) => {
       if (d.day !== day) return d;
