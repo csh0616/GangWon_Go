@@ -331,9 +331,14 @@ itineraries (활성 일정)
     #   실시간 조건 감시 에이전트(3.6절)는 status='active' AND 오늘 날짜가 start_date~end_date 사이인
     #   itineraries만 스캔 대상으로 삼는다 (여행 중이 아닌 일정까지 매번 스캔하지 않기 위함)
 
-pois (장소 데이터, TourAPI/의료관광정보 동기화)
-  - id, region_code, name, category, lat, lng, tags[], event_start_date, event_end_date, synced_at,
-    adult_only
+pois (장소 데이터, TourAPI 동기화)
+  - id, content_id, region_code, name, category, lat, lng, tags[], event_start_date, event_end_date,
+    synced_at, adult_only
+    # content_id(신규 — 1주차 아키텍처 점검 후속): TourAPI가 부여한 콘텐츠 ID. **재동기화 시 이 값을
+    # 키로 upsert해서 `id`(uuid)가 유지되도록 한다.** 기존 방식(delete 후 insert)은 매번 새 uuid를
+    # 발급하는데, itineraries.itinerary_json은 스냅샷으로 옛 poi_id를 들고 있어서(위 스냅샷 정책)
+    # 동기화 한 번에 매니징 에이전트의 pois 재조회가 0건이 되고 rain 트리거가 로그 없이 영구
+    # 무동작이 된다. 시드 데이터에도 임의의 content_id를 부여해 같은 규칙을 적용
     # tags[]는 반드시 3.5절 카테고리 마스터 목록의 키만 사용 (LLM 가중치 출력과 동일한 값 체계 유지)
     # event_start_date/end_date는 festival_event 태그를 가진 row에만 값이 있음(그 외 NULL). TourAPI의
     # 축제/공연/행사 콘텐츠 타입에 이미 포함된 필드를 그대로 매핑 — 별도 API 불필요
@@ -342,11 +347,16 @@ pois (장소 데이터, TourAPI/의료관광정보 동기화)
     # 컬럼으로 분리. relationship 필터가 family_with_kids일 때 이 값이 true인 POI를 후보에서 제외
 
 care_facilities (여행 케어 안내용 정적 데이터, 신규 — 1주차 백엔드 구현 중 추가)
-  - id, region_code, name, category(hospital/pharmacy 등), phone, lat, lng
+  - id, content_id, region_code, name_en, name_zh, category(hospital/pharmacy 등), phone, address_en,
+    address_zh, lat, lng, synced_at
     # GET /api/care(API_CONTRACT.md §4)가 그대로 반환하는 정적 큐레이션 데이터. pois와 별개 테이블로
     # 분리한 이유: 여행 케어 안내는 로그인/코스와 무관하게 항상 조회되는 정적 목록이라(2.1절), 코스
     # 생성 스코어링 대상인 pois와 성격이 다름. 시드 데이터는 8장 참고 — 병원 전화번호는 119를 제외하고
     # 실제 서비스키로 sync_medical.js 실동기화 전까지 null로 비워둠(잘못된 응급연락처 노출 방지)
+    # name_en/name_zh, address_en/address_zh (수정 — 1주차 아키텍처 점검 후속): 출처인 의료관광정보
+    # 서비스(MdclTursmService)가 langDivCd로 ENG/JPN/CHS/RUS만 제공하고 **한국어 응답이 아예 없다**.
+    # 단일 name 컬럼으로는 담을 수 없어 언어별로 분리하며, 동기화는 같은 지역을 ENG·CHS 두 번 호출해
+    # content_id 기준으로 같은 row에 합친다. 6장 "모든 사용자 대면 텍스트는 다국어 키 기반" 원칙과도 일치
 
 alerts (매니징 트리거 로그)
   - id, itinerary_id, trigger_type(weather/traffic/festival), condition, triggered_at,
@@ -371,7 +381,7 @@ alerts (매니징 트리거 로그)
 | API | 용도 | 호출 방식 |
 |---|---|---|
 | TourAPI (국문 관광정보) | POI 기본 데이터 | 배치 동기화 (실시간 호출 금지) |
-| 의료관광정보 서비스 | 여행 케어 안내용 병원/응급 데이터 (기존 PRD에 출처 미기재였던 부분 보완) | 배치 동기화 |
+| 의료관광정보 서비스 (`B551011/MdclTursmService`) | 여행 케어 안내용 병원/응급 데이터 | 배치 동기화. `/ldongCode`로 지역코드 확보 후 `/areaBasedList`를 시군×언어(ENG/CHS)로 호출 — 목록 응답에 `tel`/`mapX`/`mapY`가 이미 포함되어 `/detailCommon` 불필요. 응답 필드는 **camelCase**(TourAPI KorService2의 소문자와 반대) |
 | 기상청 단기예보 | 매니징 트리거 조건 | node-cron 5~10분 주기 |
 | 카카오맵 JavaScript SDK | 지도 표시 | 클라이언트 사이드 (앱키만으로 즉시 사용) |
 | 카카오모빌리티 Directions API (자동차 길찾기) | 코스 저장/부분 재구성 시 확정된 순서의 실제 동선·이동시간 표시 (3장) — 순서 자체는 서버 Haversine 계산이라 이 API에 의존하지 않음 | 서버 사이드, 인접 스탑 1:1 호출(다중경유지 미사용). 무료 쿼터 1만 건/일 |

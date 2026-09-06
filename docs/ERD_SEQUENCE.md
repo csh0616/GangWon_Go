@@ -38,6 +38,7 @@ erDiagram
 
     POIS {
         uuid id PK
+        string content_id "TourAPI 콘텐츠ID - 재동기화 시 upsert 키(id 보존)"
         string region_code
         string name
         string category
@@ -52,12 +53,17 @@ erDiagram
 
     CARE_FACILITIES {
         uuid id PK
+        string content_id "의료관광정보 콘텐츠ID - upsert 키"
         string region_code
-        string name
+        string name_en "ENG 호출 결과 (한국어 응답 없음)"
+        string name_zh "CHS 호출 결과"
         string category "hospital/pharmacy 등"
         string phone "실제 서비스키 동기화 전까지 119 외 NULL"
+        string address_en
+        string address_zh
         float lat
         float lng
+        timestamp synced_at
     }
 
     ALERTS {
