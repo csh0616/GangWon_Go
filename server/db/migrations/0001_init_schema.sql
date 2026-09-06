@@ -1,12 +1,9 @@
 -- GANGWON GO — 초기 스키마 (PRD 4장 / ERD_SEQUENCE.md §1 기준)
 -- Supabase 대시보드 SQL Editor에서 실행하거나 `supabase db push`로 적용하세요.
 --
--- 이 파일의 users/itineraries/pois/alerts 정의는 PRD 4장과 100% 일치합니다.
--- 아래 두 가지는 PRD 4장에 아직 없는 신규 추가 사항입니다 — HANDOFF_LOG.md에 제안으로 남겼고
--- PM 확인 후 PRD 4장에 반영되어야 "확정"입니다 (PRD 4장 규칙: "에이전트가 새 테이블을 만들기 전
--- 반드시 이 섹션에 먼저 추가하고 팀에 공유할 것"):
---   1. pois.adult_only (boolean) — relationship=family_with_kids 필터용 (PRD 3.5절 예시 조항)
---   2. care_facilities 테이블 — GET /api/care 정적 큐레이션 데이터 저장용 (API_CONTRACT.md §4)
+-- 이 파일의 users/itineraries/pois/alerts/care_facilities 정의는 PRD 4장과 100% 일치합니다.
+-- pois.adult_only, care_facilities 테이블은 1주차 백엔드 구현 중 제안했던 항목으로,
+-- PM이 PRD 4장/6장에 확정 반영했습니다 (PR #3, docs/HANDOFF_LOG.md 2026-09-06 21:00 항목).
 
 create extension if not exists "pgcrypto";
 
@@ -81,6 +78,11 @@ create index idx_pois_region on pois (region_code);
 create index idx_pois_tags on pois using gin (tags);
 
 -- ── alerts (매니징 트리거 로그) ──────────────────────────────────────────
+-- previous_poi_id/proposed_poi_id는 의도적으로 pois(id)에 대한 FK가 아니다 (1주차 아키텍처 점검 #10).
+-- itinerary_json의 poi_id와 동일한 "스냅샷 참조" 성격(PRD 4장 스냅샷 정책, ERD_SEQUENCE.md §1)이라
+-- 참조 무결성 대상이 아니며, /scripts/sync가 delete+insert로 POI의 uuid를 매번 새로 발급하기 때문에
+-- 하드 FK를 걸면 재동기화 시 기존 alerts가 깨지고, 반대로 alerts가 하나라도 있으면 그 시군 동기화가
+-- FK 위반으로 막힌다.
 create table alerts (
   id uuid primary key default gen_random_uuid(),
   itinerary_id uuid not null references itineraries(id) on delete cascade,
@@ -89,15 +91,21 @@ create table alerts (
   triggered_at timestamptz not null default now(),
   status alert_status not null default 'proposed',
   day int not null,
-  previous_poi_id uuid not null references pois(id),
-  proposed_poi_id uuid not null references pois(id),
+  previous_poi_id uuid not null,
+  proposed_poi_id uuid not null,
   responded_at timestamptz  -- NULL = 미응답(3분 타임아웃 포함), 값 있음 = 사용자가 실제 응답
 );
 
 create index idx_alerts_itinerary on alerts (itinerary_id);
 create unique index idx_alerts_dedupe_proposed on alerts (itinerary_id, day, previous_poi_id) where status = 'proposed';
 
--- ── care_facilities (신규 제안 — 헤더 참고, API_CONTRACT.md §4) ─────────
+-- Realtime 배달 (1주차 아키텍처 점검 #3) — publication에 등록된 테이블만 push되므로 이게 없으면
+-- 프론트 구독은 SUBSCRIBED로 성공하고도 아무 이벤트를 못 받는다. replica identity full은
+-- UPDATE 이벤트(confirmed/dismissed 전환)에도 itinerary_id 등 전체 컬럼이 실려서 프론트 필터가 걸리게 한다.
+alter publication supabase_realtime add table alerts;
+alter table alerts replica identity full;
+
+-- ── care_facilities (API_CONTRACT.md §4, PRD 4장 확정) ──────────────────
 create table care_facilities (
   id uuid primary key default gen_random_uuid(),
   region_code region_code_type not null,

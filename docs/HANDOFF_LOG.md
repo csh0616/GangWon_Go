@@ -238,3 +238,134 @@
   - 백엔드: P0 → P1 → P2 순서로 수정 후 `feat/backend-fixes-round1` 브랜치로 PR. 수정 완료분은 이 로그에 append.
   - PM: 수정 PR 올라오면 재점검. QA팀 세션 시작 시 TEST_PLAN에 위 항목별 회귀 테스트 케이스 추가 예정.
   - 승현님: Supabase 프로젝트 + Google OAuth, 서비스키 4종(TourAPI/의료관광정보/기상청/카카오모빌리티) 발급.
+
+## [2026-09-06 22:30] 백엔드팀 — 1차 점검 P0~P2 수정 완료 + 서비스키 실검증 결과
+
+`feat/backend-fixes-round1` 브랜치. 커밋 시점 기준 코드에 반영. PRD 6장 KST 규칙/3.5절 rain·축제
+규칙/API_CONTRACT §0.1 에러코드 표준을 전부 다시 읽고 그 기준으로 고쳤습니다.
+
+### P0 (완료)
+
+1. **`/api/alerts/*` 소유권 검사**: `createProposedAlert`/`respondToAlert`에 `userId` 필수 파라미터
+   추가, itinerary 조회에 `.eq('user_id', userId)` 체이닝(`alertTrigger.js`의 `fetchOwnedItinerary`).
+   본인 소유가 아니면 `NOT_FOUND`(404) — 존재 여부 비노출. 라우트(`alerts.js`)는 `req.user.id`를
+   그대로 넘기고, agent(`monitor.js`)는 스캔 중 이미 들고 있는 `itinerary.user_id`를 넘깁니다.
+2. 스킵함 (PM이 이미 `.gitignore` 반영, PR #4/#5).
+
+### P1 (완료)
+
+3. **Realtime publication 누락**: 마이그레이션에 `alter publication supabase_realtime add table alerts;`
+   + `alter table alerts replica identity full;` 추가.
+4. **KST 미적용**: `server/src/lib/time.js` 신설(UTC+9 시프트 방식, `todayKstISO`/`todayKstYYYYMMDD`/
+   `nowKstHourMinute`). `agent/src/monitor.js`의 "오늘" 판정, `agent/src/weather.js`의
+   `nearestBaseTime()` 모두 이걸로 교체.
+5. **중복 트리거 응답 불완전**: `createProposedAlert`가 중복이어도 기존 alert의 `previous_poi_id`/
+   `proposed_poi_id`로 POI를 다시 조회해 `message`/`proposed_stop`을 완전히 재조립. 라우트의
+   `isDuplicate` 분기 자체를 제거 — 항상 동일한 응답 형태.
+6. **3분 타임아웃 경쟁 시 500**: `respondToAlert`가 `status !== 'proposed'`면 `ALERT_EXPIRED`(409) 반환.
+7. **traffic 순차호출/전체실패 시 500**: `directions.js`의 `filterWithinDuration`을 `Promise.all` 병렬화,
+   `{withinRange, allFailed}` 반환. 카카오 API 전부 실패 시에만 Haversine 10km 근사로 폴백(진짜
+   후보 0건인 경우와 구분). 후보가 정말 없으면 `NO_CANDIDATE`(404).
+8. **감시 에이전트 전체 정지**: `monitor.js`에서 `dayIndex`/`dayEntry` 조회까지 per-itinerary
+   `try` 안으로 이동. 저장 시점 검증도 추가 — `server/src/lib/validators.js`의
+   `isValidItineraryJson()`을 `POST /api/itineraries`에 적용, 구조가 어긋나면 `INVALID_STRUCTURED_INPUT`.
+
+### P2 (완료)
+
+9. **필드 케이싱 불일치**: `category_mapping.js`가 `raw.contentTypeId`(항상 undefined) 대신
+   `raw.contenttypeid`(TourAPI `_type=json` 실제 소문자 키)를 읽도록 수정 — `CONTENT_TYPE_MAP`
+   전체가 dead code였던 문제 해결.
+10. **alerts FK 충돌**: `previous_poi_id`/`proposed_poi_id`의 `pois(id)` 하드 FK 제거(스냅샷 참조라
+    참조무결성 대상 아님, PRD 4장/ERD_SEQUENCE.md §1과 동일 원칙). 컬럼은 그대로 uuid로 유지.
+11. **축제 일자 판정**: `scoring.js` — 앵커로 안 뽑힌 festival_event POI는 일반 스탑 풀에서 완전히
+    제외(그렇지 않으면 날짜 안 맞는 날에 배치될 수 있었음). `regenerate-stop`(`itineraries.js`)과
+    자동 트리거(`alertTrigger.js`) 양쪽에 `dateForDayIndex`+`festivalOverlapsDate`로 그 날짜 필터
+    재적용. 더미데이터로 검증: weight=0일 때 후보 풀 누출 없음, weight>0일 때 정확히 이벤트 날짜와
+    겹치는 day에만 앵커 배치되는 것 확인.
+12. **rain 처리 방식**: `alertAdjust.js`를 가중치 조정(`adjustWeightsForCondition`) 대신 후보 제외
+    (`filterOutdoorForRain`)로 교체. 태그 여러 개 가진 POI(`["nature_hiking","food_local"]`)가
+    남은 점수로 1위가 되던 문제 재현 테스트로 확인 후 수정 검증함.
+13. **앵커 주변 채우기가 거리만 봄**: 점수를 1차 기준, 거리를 보조 페널티로 섞은 `__combined` 스코어로
+    변경 (`ANCHOR_DISTANCE_PENALTY_WEIGHT = 0.3`).
+14. **좌표 (0,0) 삽입**: `sync_pois.js` — `mapx`/`mapy` 빈 값 사전 제외 + 대한민국 대략 경계
+    (lat 33~39, lng 124~132) 밖이면 제외.
+15. **delete+insert 비원자성**: `sync_pois.js`/`sync_medical.js`/`seed_pois.js`/`seed_care.js` 전부
+    INSERT 먼저 → 성공 시에만 `synced_at < 이번실행시각` 조건으로 이전 데이터 DELETE하도록 순서 변경
+    (PM이 지적한 파일 외 나머지 3개도 동일 패턴이라 함께 고쳤습니다).
+16. **auth 미들웨어 unhandled rejection**: `requireAuth` 전체를 try/catch로 감싸고 `next(err)`.
+17. **날짜 미검증**: `validators.js`의 `validateTripDates`(형식/순서/10일 상한) + `isValidCompanions`를
+    `/generate`와 `POST /api/itineraries` 양쪽에 적용.
+18. **기타 계약 불일치**: (a) `regenerate-stop`의 LLM 실패 폴백을 저장된 `preference_weights`로
+    바꿈(`llm.js`에 `extractWeightsRaw`/`extractStopWeights` 분리 — `/generate` 전용 전부-0 폴백과
+    분리). (b) `respondToAlert` 응답을 `{status, updated_stop}`만 담게 축소. (c) PATCH가 `day`/
+    `target_poi_id` 불일치 시 `STOP_NOT_FOUND`(404) 반환하도록 수정(기존엔 무조건 200). (d) 알림
+    문구를 완성 문장 대신 `{key, params}` 구조로 변경 — `alertTrigger.js`의 `buildMessagePayload`.
+    (e) `lang`을 `POST /api/itineraries`에서 선택적으로 받아 최초 저장 시 `users.preferred_lang`에 기록.
+
+추가로 §0.1을 다시 읽다가 발견한 것: `errorHandler.js`가 인식 못한 에러(raw DB 에러 등)의
+`err.message`를 그대로 클라이언트에 흘려보내고 있었습니다 — §0.1 "목록에 없는 실패는 로그에만
+원문을 남기고 응답엔 `INTERNAL_ERROR`+일반화된 메시지만" 규정과 어긋나서 `apiError()`로 만든
+에러만 지정 status/code/message를 쓰고, 나머지는 전부 `INTERNAL_ERROR` 500 + 일반 메시지로
+바꿨습니다(`isApiError` 플래그로 구분). `/generate`의 `NO_POI_DATA`/`NO_CANDIDATE` 구분도 §0.1
+정의대로 다시 나눴습니다(region에 POI 자체가 0건 vs relationship 필터로 다 걸러진 경우).
+
+### API_CONTRACT.md 반영 제안 (직접 수정 안 함)
+
+- §3 alerts payload의 `message` 예시가 완성 문장(`{en, zh}`)인데, PRD 6장(1주차 점검 신설)이
+  "하드코딩 금지, 키+치환값" 규칙을 명시했습니다. 코드는 `{ key: "alert.rain", params: {
+  previous_poi_name, candidate_poi_name } }` 형태로 이미 바꿨으니, §3 예시도 이 형태로 갱신 부탁드립니다.
+- §2 `POST /api/itineraries` 요청에 선택 필드 `lang`(`en`|`zh`) 추가 제안 — 최초 저장 시
+  `users.preferred_lang`에 기록하기 위함(18-e). 없으면 그냥 기록 안 하고 넘어가서 하위호환됩니다.
+
+### 시드 데이터 보강 (완료)
+
+- `adult_only: true` 3건 추가 — 인제 "내린천"(래프팅), 홍천 "힐리언스 선마을"(웰니스 리조트),
+  평창 "알펜시아리조트"(스키점프 체험). **실제 연령 제한 정책을 확인한 값이 아니라 `family_with_kids`
+  필터 검증용 테스트 픽스처**입니다 — 개연성 있는 액티비티 유형으로 골랐을 뿐, 세 시설의 실제 정책은
+  미확인. QA 테스트 후 실제 정책으로 교체 필요.
+- festival_event 2건 추가 — 인제 "자작나무숲 단풍축제(데모)"(09-15~16), 홍천 "억새축제(데모)"
+  (09-17~18). **실존하지 않는 가상 축제**입니다(이름/category에 "데모" 명시). 인제·홍천에서도
+  축제 앵커 로직을 시연할 수 있게 하려는 목적이며, 실제 TourAPI 축제 데이터가 들어오면 자연히 덮어써짐.
+
+### 서비스키 실검증 결과 (일부만 가능했음 — 아래 블로커 참고)
+
+- ✅ **카카오모빌리티 Directions API**: 실제 키로 호출 성공 확인. 인제전통시장→하늘내린센터
+  구간 24초 응답 정상. 시드 데이터의 "소양호" 좌표(호수 한가운데 근사치)로 테스트했을 때는
+  `result_code 103`(도착지 주변 도로 탐색 불가)이 났는데, 이건 API/키 문제가 아니라 좌표 정확도
+  문제입니다 — 실제 TourAPI 동기화로 mapx/mapy가 정확해지면 자연히 해결됨.
+- ✅ **기상청 격자좌표(nx/ny)**: 이전엔 REGION_GRID가 비어있어 명시적 에러를 던지게만 해뒀는데,
+  이번에 기상청이 공개한 LCC 변환 공식을 `server/src/lib/kmaGrid.js`로 직접 구현해 인제읍/홍천읍/
+  평창읍 좌표로 계산했습니다(암기값 하드코딩이 아니라 코드로 재현 가능). 알려진 검증 기준점인
+  서울시청(37.5665, 126.9780) → (60, 127)로 공식 자체는 맞다는 걸 확인했습니다. 계산 결과:
+  인제(80,138)/홍천(75,130)/평창(84,123). **실제 기상청 API 호출로 이 격자가 응답을 정상적으로
+  주는지는 아래 네트워크 블로커 때문에 이번 세션에서 확인 못했습니다.**
+- ❌ **TourAPI/기상청 실호출 (`apis.data.go.kr`)**: 이 세션의 실행 환경에서 이 도메인만 연결이
+  전부 타임아웃됩니다 — GitHub/카카오모빌리티 등 다른 도메인은 정상 연결되는 걸로 봐서 특정
+  호스트만 막히거나 응답이 없는 상태입니다(샌드박스 권한을 해제하고 재시도해도 동일, 3회 재시도도
+  전부 타임아웃 — 일시적 문제로 보이지 않음). **`sigunguCode`(인제5/홍천3/평창7) 검증, 실제
+  TourAPI 데이터로 시드 교체, 기상청 실호출 확인 전부 이 문제로 못 했습니다.**
+- ⚠️ 요청하신 `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`(Encoding/Decoding 키 오탐지) 여부도 같은
+  이유로 확인 불가 — 연결 자체가 타임아웃이라 서버 응답을 아예 못 받았습니다. 이 에러는 서버가
+  응답을 줘야 나타나므로, 이 세션의 결과만으로는 키 타입 문제인지 네트워크 문제인지 구분이 안 됩니다.
+- ⚠️ **DB 스키마 미적용**: `scripts/sync/.env`로 실제 Supabase 프로젝트에 연결은 확인했지만
+  (`pois`/`care_facilities` 테이블 조회 시 "not found in schema cache" — Supabase 프로젝트는
+  존재하지만 `server/db/migrations/0001_init_schema.sql`이 아직 실행 안 된 상태), 마이그레이션이
+  적용 전이라 `sync_pois.js`를 실행해도 어차피 실패했을 것입니다. 승현님이 Supabase SQL Editor에서
+  이 마이그레이션 파일을 먼저 실행해야 이후 모든 쓰기 작업(시드/동기화/실제 앱 동작)이 가능합니다.
+
+- 블로커:
+  1. **DB 마이그레이션 미적용** — `docs/../server/db/migrations/0001_init_schema.sql`을 Supabase
+     SQL Editor에서 실행 필요 (`server/README.md` §1 4번 단계). 이게 안 되면 sync/seed 스크립트
+     전부 "table not found"로 실패합니다.
+  2. **`apis.data.go.kr` 네트워크 불통** — 이 세션의 실행 환경 한정 문제로 보입니다. 승현님 본인
+     PC(또는 다른 네트워크)의 터미널에서 아래를 직접 실행해 결과를 공유해주시면, 그 로그를 보고
+     `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` 여부·`sigunguCode` 정확성을 바로 진단하겠습니다:
+     ```
+     cd scripts/sync && node sync_pois.js
+     ```
+     (마이그레이션 먼저 적용한 뒤 실행할 것 — 위 1번)
+- 다음 액션:
+  - 승현님: (1) 마이그레이션 SQL 실행, (2) 본인 터미널에서 `sync_pois.js` 실행 후 로그 공유.
+  - 백엔드: 로그 받으면 `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`/sigunguCode 오류 여부 진단 후 필요시
+    `tourapi_client.js`/`REGION_TO_SIGUNGU` 수정. 기상청 실호출도 같은 방식으로 로그 받아 확인.
+  - PM: 위 API_CONTRACT.md 반영 제안 2건(§3 message 형태, §2 lang 필드) 확인 부탁드립니다.

@@ -36,7 +36,7 @@ async function fetchMedicalFacilities(regionCode) {
   return items ? (Array.isArray(items) ? items : [items]) : [];
 }
 
-async function syncRegion(regionCode) {
+async function syncRegion(regionCode, syncStartedAt) {
   const items = await fetchMedicalFacilities(regionCode);
   const rows = items.map((raw) => ({
     region_code: regionCode,
@@ -45,7 +45,7 @@ async function syncRegion(regionCode) {
     phone: raw.telNo || raw.phone || null, // TODO: 실제 필드명 확인
     lat: raw.latitude ? Number(raw.latitude) : null,
     lng: raw.longitude ? Number(raw.longitude) : null,
-    synced_at: new Date().toISOString(),
+    synced_at: syncStartedAt,
   }));
 
   if (rows.length === 0) {
@@ -53,18 +53,28 @@ async function syncRegion(regionCode) {
     return;
   }
 
-  const { error: deleteErr } = await supabase.from('care_facilities').delete().eq('region_code', regionCode).eq('category', 'hospital');
-  if (deleteErr) throw deleteErr;
+  // INSERT 먼저, 성공한 뒤에만 이전 데이터 DELETE (sync_pois.js와 동일 패턴, 1주차 점검 #15 —
+  // 실패 시 "마지막 성공 데이터 유지" 원칙을 실제로 지키기 위함).
   const { error: insertErr } = await supabase.from('care_facilities').insert(rows);
   if (insertErr) throw insertErr;
+
+  const { error: deleteErr } = await supabase
+    .from('care_facilities')
+    .delete()
+    .eq('region_code', regionCode)
+    .eq('category', 'hospital')
+    .lt('synced_at', syncStartedAt);
+  if (deleteErr) throw deleteErr;
+
   console.log(`[sync_medical] ${regionCode}: ${rows.length}건 동기화 완료`);
 }
 
 async function main() {
   for (const regionCode of REGION_CODES) {
     try {
+      const syncStartedAt = new Date().toISOString();
       // eslint-disable-next-line no-await-in-loop
-      await syncRegion(regionCode);
+      await syncRegion(regionCode, syncStartedAt);
     } catch (err) {
       console.error(`[sync_medical] ${regionCode} 동기화 실패:`, err.message);
     }
