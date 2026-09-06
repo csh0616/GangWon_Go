@@ -2,6 +2,10 @@
 const { ACTIVITY_STOP_RANGE } = require('./categories');
 const { haversineKm, twoOptOptimize, kMeansCluster } = require('./geo');
 
+// 앵커 주변 채우기: 거리가 스코어 순위를 얼마나 흔들 수 있는지 (0=거리 무시, 1=거리만 봄).
+// 스코어를 1차 기준으로 유지하면서 근접도로 동점/근소차를 가르는 정도의 값 (1주차 점검 #13).
+const ANCHOR_DISTANCE_PENALTY_WEIGHT = 0.3;
+
 function scorePoi(poi, weights) {
   const tags = poi.tags || [];
   return tags.reduce((sum, tag) => sum + (weights[tag] || 0), 0);
@@ -97,17 +101,23 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
     dayPlans.push({ date, anchor, slots: maxPerDay - (anchor ? 1 : 0), picked: [] });
   }
 
-  let freePool = scored.filter((p) => !usedIds.has(p.id));
+  // 앵커로 뽑히지 않은 festival_event POI는 일반 스탑 풀에서 완전히 제외한다 (1주차 아키텍처 점검 #11) —
+  // 그렇지 않으면 일반 배치 경로가 날짜 겹침을 검사하지 않아 "축제가 열리지 않는 날"에 배치될 수 있다.
+  let freePool = scored.filter((p) => !usedIds.has(p.id) && !(p.tags || []).includes('festival_event'));
 
-  // 앵커가 있는 날: "그 주변으로 클러스터링" = 앵커와 가까운 순으로 채움 (PRD 3.5절)
+  // 앵커가 있는 날: "그 주변으로 클러스터링"이되 가중치 스코어를 1차 기준으로, 거리는 함께 고려한다
+  // (1주차 아키텍처 점검 #13 — 거리만 보면 사용자 취향이 그 날 통째로 무시되고, 앵커 근처 POI가
+  // 먼저 소진돼 다른 날 후보 품질까지 떨어졌다).
   dayPlans.forEach((dp) => {
     if (!dp.anchor) return;
-    const nearest = freePool
-      .slice()
-      .sort((a, b) => haversineKm(dp.anchor, a) - haversineKm(dp.anchor, b))
+    const withDistance = freePool.map((p) => ({ ...p, __distanceToAnchor: haversineKm(dp.anchor, p) }));
+    const maxDist = Math.max(1e-6, ...withDistance.map((p) => p.__distanceToAnchor));
+    const ranked = withDistance
+      .map((p) => ({ ...p, __combined: p.__score - ANCHOR_DISTANCE_PENALTY_WEIGHT * (p.__distanceToAnchor / maxDist) }))
+      .sort((a, b) => b.__combined - a.__combined)
       .slice(0, dp.slots);
-    dp.picked = nearest;
-    const pickedIds = new Set(nearest.map((p) => p.id));
+    dp.picked = ranked;
+    const pickedIds = new Set(ranked.map((p) => p.id));
     freePool = freePool.filter((p) => !pickedIds.has(p.id));
   });
 
@@ -153,6 +163,7 @@ module.exports = {
   scorePoi,
   filterByRelationship,
   daysCount,
+  dateForDayIndex,
   festivalOverlapsDate,
   festivalOverlapsRange,
   buildItineraryDays,

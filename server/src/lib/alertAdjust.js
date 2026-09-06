@@ -1,22 +1,11 @@
-// PRD 3.5절 — 상황별 카테고리 조정표 (전 항목 확정)
-const { emptyWeights } = require('./categories');
+// PRD 3.5절 — 상황별 후보 조정표.
+// rain은 "가중치 0"이 아니라 "후보 제외"다 (1주차 아키텍처 점검에서 수정 — 태그를 여러 개 가진
+// POI가 가중치만 0으로 낮춘 남은 점수로 여전히 1위가 될 수 있었음. 특히 자유텍스트 없이 만든
+// 코스는 가중치가 전부 0이라 전부 동점이 되어 DB 순서대로 아무거나 뽑히는 문제가 있었다).
+const RAIN_EXCLUDED_TAGS = ['nature_hiking', 'leisure_sports', 'festival_event'];
 
-const RAIN_SUPPRESSED_TAGS = ['nature_hiking', 'leisure_sports', 'festival_event'];
-
-/**
- * condition에 따라 preference_weights를 조정한다. traffic은 카테고리 조정이 아니라
- * 거리 기준 후보 재선정이므로 여기서는 원본 가중치를 그대로 반환한다 (호출부에서 거리 필터 적용).
- */
-function adjustWeightsForCondition(weights, condition) {
-  const adjusted = { ...emptyWeights(), ...weights };
-  if (condition === 'rain') {
-    RAIN_SUPPRESSED_TAGS.forEach((tag) => {
-      adjusted[tag] = 0;
-    });
-  }
-  // condition === 'traffic' → 조정 없음 (거리 필터는 scoring.js의 후보 선정 단계에서 처리)
-  // condition === 'festival_cancelled' → 조정 없음 (해당 festival_event POI 1건만 후보에서 제외, 호출부 처리)
-  return adjusted;
+function filterOutdoorForRain(pois) {
+  return pois.filter((p) => !(p.tags || []).some((tag) => RAIN_EXCLUDED_TAGS.includes(tag)));
 }
 
-module.exports = { adjustWeightsForCondition, RAIN_SUPPRESSED_TAGS };
+module.exports = { filterOutdoorForRain, RAIN_EXCLUDED_TAGS };

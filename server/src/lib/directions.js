@@ -27,22 +27,33 @@ async function getDrivingDurationSeconds(origin, destination) {
 }
 
 /**
- * origin 기준 이동시간이 maxSeconds 이하인 후보만 남긴다. 개별 호출 실패는 그 후보만 제외하고 계속 진행
- * (전체 요청을 막지 않음, PRD 6장 폴백 원칙과 동일 정신).
+ * origin 기준 이동시간이 maxSeconds 이하인 후보만 남긴다. 후보 호출은 병렬로 처리하고(순차 호출이던
+ * 것을 1주차 점검에서 병렬화 — 후보 수만큼 지연시간이 누적돼 3초 기준을 넘길 수 있었음), 개별 실패는
+ * 그 후보만 제외한다. **전부 실패**하면(카카오 키 미설정/장애) `allFailed: true`를 반환해 호출부가
+ * Haversine 거리 근사로 폴백할 수 있게 한다 — 후보가 진짜 0건인 것과 API 전체 장애를 구분하기 위함
+ * (PRD 6장 폴백 원칙: 실패한 조각만 조용히 대체, 핵심 경험은 막지 않음).
+ * @returns {Promise<{withinRange: Array, allFailed: boolean}>}
  */
 async function filterWithinDuration(origin, candidates, maxSeconds) {
-  const results = [];
-  for (const candidate of candidates) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const duration = await getDrivingDurationSeconds(origin, candidate);
-      if (duration <= maxSeconds) results.push(candidate);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`[directions] 후보 ${candidate.id} 이동시간 조회 실패, 후보에서 제외:`, err.message);
-    }
-  }
-  return results;
+  if (candidates.length === 0) return { withinRange: [], allFailed: false };
+
+  const results = await Promise.all(
+    candidates.map(async (candidate) => {
+      try {
+        const duration = await getDrivingDurationSeconds(origin, candidate);
+        return { candidate, duration, ok: true };
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[directions] 후보 ${candidate.id} 이동시간 조회 실패, 후보에서 제외:`, err.message);
+        return { candidate, ok: false };
+      }
+    })
+  );
+
+  const succeeded = results.filter((r) => r.ok);
+  const withinRange = succeeded.filter((r) => r.duration <= maxSeconds).map((r) => r.candidate);
+  const allFailed = succeeded.length === 0;
+  return { withinRange, allFailed };
 }
 
 module.exports = { getDrivingDurationSeconds, filterWithinDuration };

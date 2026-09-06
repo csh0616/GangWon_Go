@@ -81,30 +81,55 @@ async function callExtractWeightsOnce(freeText) {
 }
 
 /**
- * API_CONTRACT.md §1 — free_text가 있을 때만 호출. 실패/스키마 검증 실패 시 1회 재시도,
- * 그래도 실패하면 weights 전부 0 + activity_level medium으로 폴백 (에러로 코스 생성을 막지 않음).
+ * 실패/스키마 검증 실패 시 1회 재시도 후에도 안 되면 null (호출부가 각자의 폴백 정책을 정한다 —
+ * /generate는 전부 0, regenerate-stop은 저장된 preference_weights. 1주차 점검 #18: 이 둘을
+ * 하나로 뭉쳐뒀던 게 regenerate-stop에서도 전부 0으로 덮어써버리는 버그의 원인이었음).
  */
-async function extractPreferenceWeights(freeText) {
-  if (!freeText || !freeText.trim()) {
-    return { weights: emptyWeights(), activity_level: 'medium' };
-  }
-
+async function extractWeightsRaw(freeText) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const payload = await callExtractWeightsOnce(freeText);
       if (isValidWeightsPayload(payload)) return payload;
       // eslint-disable-next-line no-console
-      console.warn(`[llm] extractPreferenceWeights 스키마 검증 실패 (attempt ${attempt + 1})`, payload);
+      console.warn(`[llm] weights 스키마 검증 실패 (attempt ${attempt + 1})`, payload);
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn(`[llm] extractPreferenceWeights 호출 실패 (attempt ${attempt + 1})`, err.message);
+      console.warn(`[llm] weights 호출 실패 (attempt ${attempt + 1})`, err.message);
     }
   }
+  return null;
+}
 
+/**
+ * API_CONTRACT.md §1 — free_text가 있을 때만 호출. 실패 시 weights 전부 0 + activity_level medium으로
+ * 폴백 (에러로 코스 생성을 막지 않음). /generate 전용 폴백 정책.
+ */
+async function extractPreferenceWeights(freeText) {
+  if (!freeText || !freeText.trim()) {
+    return { weights: emptyWeights(), activity_level: 'medium' };
+  }
+  const result = await extractWeightsRaw(freeText);
+  if (result) return result;
   // eslint-disable-next-line no-console
   console.error('[llm] extractPreferenceWeights 최종 실패 — weights 전부 0, activity_level medium으로 폴백');
   return { weights: emptyWeights(), activity_level: 'medium' };
+}
+
+/**
+ * PRD 3.5절 부분 재구성 전용 — free_text가 있을 때 이 스탑만의 가중치를 새로 뽑는다. 실패 시
+ * /generate와 달리 전부 0이 아니라 **저장된 preference_weights**로 폴백한다(1주차 점검 #18) —
+ * 원래 취향을 완전히 잃는 것보다 낫다.
+ * @param {string} freeText
+ * @param {object} fallbackWeights - itinerary.preference_weights
+ */
+async function extractStopWeights(freeText, fallbackWeights) {
+  if (!freeText || !freeText.trim()) return fallbackWeights;
+  const result = await extractWeightsRaw(freeText);
+  if (result) return result.weights;
+  // eslint-disable-next-line no-console
+  console.error('[llm] extractStopWeights 최종 실패 — 저장된 preference_weights로 폴백');
+  return fallbackWeights;
 }
 
 /**
@@ -135,4 +160,4 @@ async function generateNarration(itineraryDays) {
   return { en: null, zh: null };
 }
 
-module.exports = { extractPreferenceWeights, generateNarration };
+module.exports = { extractPreferenceWeights, extractStopWeights, generateNarration };

@@ -3,23 +3,22 @@ const path = require('path');
 const { supabaseAdmin } = require(path.join(__dirname, '../../server/src/config/supabaseClient'));
 const { createProposedAlert, dismissExpiredProposals } = require(path.join(__dirname, '../../server/src/lib/alertTrigger'));
 const { getDrivingDurationSeconds } = require(path.join(__dirname, '../../server/src/lib/directions'));
+const { todayKstISO } = require(path.join(__dirname, '../../server/src/lib/time'));
 const { fetchRainStatus } = require('./weather');
 
 const TRAFFIC_THRESHOLD_SECONDS = 60 * 60; // 1시간 초과 (PRD 3.5절)
 const RAIN_TAGS = ['nature_hiking', 'leisure_sports', 'festival_event'];
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
+// PRD 6장(1주차 점검 #4) — "오늘"은 KST 기준. toISOString()(UTC)을 쓰면 한국 새벽 0~9시 사이에
+// 전날 일정을 스캔하거나 당일치기 일정이 감시 대상에서 통째로 빠지는 조용한 실패가 생겼다.
 function tripDayIndex(startDate) {
   const start = new Date(`${startDate}T00:00:00Z`);
-  const today = new Date(`${todayISO()}T00:00:00Z`);
+  const today = new Date(`${todayKstISO()}T00:00:00Z`);
   return Math.round((today - start) / (1000 * 60 * 60 * 24)) + 1;
 }
 
 async function fetchActiveItinerariesInProgress() {
-  const today = todayISO();
+  const today = todayKstISO();
   const { data, error } = await supabaseAdmin
     .from('itineraries')
     .select('*')
@@ -55,6 +54,7 @@ async function checkRain(itinerary, dayEntry) {
 
   await createProposedAlert({
     itineraryId: itinerary.id,
+    userId: itinerary.user_id,
     triggerType: 'weather',
     condition: 'rain',
     day: dayEntry.day,
@@ -78,6 +78,7 @@ async function checkTraffic(itinerary, dayEntry) {
       // eslint-disable-next-line no-await-in-loop
       await createProposedAlert({
         itineraryId: itinerary.id,
+        userId: itinerary.user_id,
         triggerType: 'traffic',
         condition: 'traffic',
         day: dayEntry.day,
@@ -92,11 +93,14 @@ async function scanAndTrigger() {
   const itineraries = await fetchActiveItinerariesInProgress();
 
   for (const itinerary of itineraries) {
-    const dayIndex = tripDayIndex(itinerary.start_date);
-    const dayEntry = itinerary.itinerary_json.days.find((d) => d.day === dayIndex);
-    if (!dayEntry) continue; // eslint-disable-line no-continue
-
+    // dayEntry 조회까지 try 안으로 옮김 (1주차 점검 #8) — 이전엔 itinerary_json이 기형(days 없음 등)인
+    // row 하나가 여기서 던지면 try 밖이라 scanAndTrigger 전체가 죽고, 그 뒤 itinerary들이 이번 주기는
+    // 물론 다음 주기에도 영원히 스캔 안 되는 문제가 있었다 (같은 기형 row가 매번 먼저 걸리므로).
     try {
+      const dayIndex = tripDayIndex(itinerary.start_date);
+      const dayEntry = itinerary.itinerary_json?.days?.find((d) => d.day === dayIndex);
+      if (!dayEntry) continue; // eslint-disable-line no-continue
+
       // eslint-disable-next-line no-await-in-loop
       await checkRain(itinerary, dayEntry);
       // eslint-disable-next-line no-await-in-loop

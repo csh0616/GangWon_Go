@@ -39,13 +39,15 @@ const CAT1_MAP = {
 
 /**
  * @param {object} raw - TourAPI 원본 항목 (areaBasedList2 등 응답의 1개 row)
- * @param {string|number} raw.contentTypeId
+ * @param {string|number} raw.contenttypeid - TourAPI `_type=json` 응답은 키가 전부 소문자다
+ *   (1주차 아키텍처 점검 #9 — `contentTypeId`로 읽었더니 항상 undefined라 CONTENT_TYPE_MAP 전체가
+ *   dead code였음. cat1/cat2는 원래부터 소문자라 영향 없었음)
  * @param {string} [raw.cat1]
  * @param {string} [raw.cat2]
  * @returns {string|null} 7개 마스터 키 중 하나, 매칭 안 되면 null (동기화 대상 제외)
  */
 function mapTourApiCategory(raw) {
-  const contentTypeId = String(raw.contentTypeId || '');
+  const contentTypeId = String(raw.contenttypeid || '');
   if (CONTENT_TYPE_MAP[contentTypeId]) return CONTENT_TYPE_MAP[contentTypeId];
 
   if (raw.cat2 && CAT2_MAP[raw.cat2]) return CAT2_MAP[raw.cat2];

@@ -5,29 +5,37 @@
 // 서비스키/네트워크가 없어 검증하지 못했다 — 아래 GRID를 채우기 전엔 fetchRainStatus가 명시적으로
 // 에러를 던진다 (틀린 좌표로 조용히 엉뚱한 지역 날씨를 가져오는 것을 막기 위함). docs/HANDOFF_LOG.md 참고.
 require('dotenv').config();
+const path = require('path');
+const { todayKstYYYYMMDD, nowKstHourMinute } = require(path.join(__dirname, '../../server/src/lib/time'));
+const { latLngToKmaGrid } = require(path.join(__dirname, '../../server/src/lib/kmaGrid'));
 
 const BASE_URL = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst';
 const SERVICE_KEY = process.env.KMA_SERVICE_KEY;
 
-// TODO: 기상청 격자 좌표 변환기(https://www.kma.go.kr)로 실제 값 확인 후 채울 것
-const REGION_GRID = {
-  injae: null, // { nx: ?, ny: ? }
-  hongcheon: null,
-  pyeongchang: null,
+// 시군 대표 좌표(군청 소재지, seed 데이터의 전통시장/보건의료원 좌표와 동일) → 기상청 격자로 변환
+// (kmaGrid.js의 공식 사용). 실제 서비스키로 최초 호출해 응답이 정상 오는지 검증 필요 — 격자가 1~2칸
+// 어긋나도 같은 시군 인접 동네 예보라 데모에는 영향 없는 수준이지만, 정밀 서비스 전환 시
+// 기상청 "동네예보 격자좌표" 조회 화면으로 재확인 권장.
+const REGION_COORDS = {
+  injae: { lat: 38.0692, lng: 128.1706 }, // 인제읍
+  hongcheon: { lat: 37.696, lng: 127.885 }, // 홍천읍
+  pyeongchang: { lat: 37.3706, lng: 128.39 }, // 평창읍
 };
 
+const REGION_GRID = Object.fromEntries(Object.entries(REGION_COORDS).map(([region, coord]) => [region, latLngToKmaGrid(coord.lat, coord.lng)]));
+
+// PRD 6장(1주차 점검 #4) — hour/minute을 KST로 통일. 이전엔 getHours()(서버 로컬/UTC)와
+// toISOString()(UTC 날짜)을 섞어 써서 base_date가 실제와 1~2일 어긋났다.
 function nearestBaseTime() {
   // 단기예보는 02,05,08,11,14,17,20,23시(+10분 이후)에만 발표 — 가장 최근 발표시각으로 스냅
   const slots = [23, 20, 17, 14, 11, 8, 5, 2];
-  const now = new Date();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
+  const { hour, minute } = nowKstHourMinute();
   const effectiveHour = minute >= 10 ? hour : hour - 1;
-  const slot = slots.find((s) => s <= effectiveHour) ?? 23;
-  const date = new Date(now);
-  if (effectiveHour < 2 && slot === 23) date.setDate(date.getDate() - 1);
-  const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, '');
-  return { baseDate: yyyymmdd, baseTime: `${String(slot).padStart(2, '0')}00` };
+  const found = slots.find((s) => s <= effectiveHour);
+  const usesPreviousDay = found === undefined; // effectiveHour < 2 → 전날 23시 발표 사용
+  const slot = found ?? 23;
+  const baseDate = todayKstYYYYMMDD(usesPreviousDay ? -1 : 0);
+  return { baseDate, baseTime: `${String(slot).padStart(2, '0')}00` };
 }
 
 /**

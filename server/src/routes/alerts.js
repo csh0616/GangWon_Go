@@ -13,12 +13,10 @@ router.post('/trigger', requireAuth, async (req, res, next) => {
       throw apiError(400, 'INVALID_STRUCTURED_INPUT', 'itinerary_id/trigger_type/condition/day/target_poi_id는 필수입니다.');
     }
 
-    const result = await createProposedAlert({ itineraryId, triggerType, condition, day, targetPoiId });
+    // 1주차 점검 #1 — 소유권 검사 없이 itinerary_id/alert_id만으로 남의 일정을 조회·변경할 수 있었음.
+    const result = await createProposedAlert({ itineraryId, userId: req.user.id, triggerType, condition, day, targetPoiId });
 
-    if (result.isDuplicate) {
-      return res.status(200).json({ data: { alert_id: result.alert.id, status: result.alert.status, reused: true }, error: null });
-    }
-
+    // 중복이어도 신규 생성과 완전히 동일한 응답 형태 (1주차 점검 #5)
     res.status(200).json({
       data: {
         alert_id: result.alert.id,
@@ -44,7 +42,7 @@ router.post('/:alert_id/respond', requireAuth, async (req, res, next) => {
     if (response !== 'yes' && response !== 'no') {
       throw apiError(400, 'INVALID_STRUCTURED_INPUT', 'response는 yes 또는 no만 허용됩니다.');
     }
-    const result = await respondToAlert({ alertId: req.params.alert_id, response });
+    const result = await respondToAlert({ alertId: req.params.alert_id, userId: req.user.id, response });
     res.status(200).json({ data: result, error: null });
   } catch (err) {
     next(err);

@@ -15,11 +15,14 @@ async function main() {
   const rows = JSON.parse(fs.readFileSync(seedPath, 'utf-8'));
 
   const regionCodes = [...new Set(rows.map((r) => r.region_code))];
-  const { error: deleteErr } = await supabase.from('care_facilities').delete().in('region_code', regionCodes);
-  if (deleteErr) throw deleteErr;
+  const syncStartedAt = new Date().toISOString();
 
-  const { error: insertErr } = await supabase.from('care_facilities').insert(rows.map((r) => ({ ...r, synced_at: new Date().toISOString() })));
+  // INSERT 먼저, 성공한 뒤에만 이전 데이터 DELETE (sync_pois.js와 동일 패턴, 1주차 점검 #15)
+  const { error: insertErr } = await supabase.from('care_facilities').insert(rows.map((r) => ({ ...r, synced_at: syncStartedAt })));
   if (insertErr) throw insertErr;
+
+  const { error: deleteErr } = await supabase.from('care_facilities').delete().in('region_code', regionCodes).lt('synced_at', syncStartedAt);
+  if (deleteErr) throw deleteErr;
 
   console.log(`[seed_care] ${rows.length}건 시드 완료 (${regionCodes.join(', ')})`);
 }
