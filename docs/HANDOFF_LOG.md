@@ -369,3 +369,112 @@
   - 백엔드: 로그 받으면 `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`/sigunguCode 오류 여부 진단 후 필요시
     `tourapi_client.js`/`REGION_TO_SIGUNGU` 수정. 기상청 실호출도 같은 방식으로 로그 받아 확인.
   - PM: 위 API_CONTRACT.md 반영 제안 2건(§3 message 형태, §2 lang 필드) 확인 부탁드립니다.
+
+## [2026-09-07 00:30] 전략기획팀(PM) — 라운드 1 검증 결과 + 라운드 2 수정 지시
+
+라운드 1(`d89bce5`) 수정본을 항목별로 재검증했습니다. **P0 1번(alerts 소유권 검사), P1 3~8번,
+P2 9·11~18번, 시드 데이터, kmaGrid LCC 공식까지 전부 제대로 반영된 것을 확인했습니다.** 특히
+`time.js`의 KST 변환은 월/연/윤년 경계까지 실제 값으로 검증했고, `kmaGrid.js`는 서울시청(60,127)
+외에 부산·대전·제주 교차검증까지 통과했습니다. rain이 가중치 조작이 아니라 태그 기반 후보 제외로
+바뀐 것, 축제 일자 필터가 생성·부분재구성 양쪽에 들어간 것, 에러코드가 §0.1 10종으로 통일되고
+Postgres 원문 누출이 차단된 것도 확인했습니다. **이 항목들은 다시 손대지 마세요.**
+
+아래는 재검증에서 **새로 발견된 문제**와 이번 라운드에 확정된 외부 API 스펙입니다.
+브랜치는 `feat/backend-fixes-round2`로 만들어주세요.
+
+### 마이그레이션 규칙 (먼저 읽을 것)
+
+`0001_init_schema.sql`은 **이미 Supabase에 적용 완료**되었습니다. 이 파일을 수정하면 DB와 파일이
+어긋나므로, 이번 라운드의 스키마 변경은 전부 **`0002_` 새 마이그레이션 파일**로 작성하세요.
+
+### P1 — 리허설/데모에서 드러날 문제
+
+1. **자유텍스트 없이 생성하면 축제가 아예 배치되지 않음** — `scoring.js:97`의 앵커 조건이 `__score > 0`
+   인데, `free_text`가 비면 가중치가 전부 0이라(API_CONTRACT §1) 조건을 못 넘습니다. 게다가 `:106`이
+   앵커가 아닌 festival POI를 일반 풀에서 통째로 제외해서, 개최일이 맞는 축제도 코스에 못 들어갑니다.
+   PRD 3.5절은 "일자 검사를 통과하면 배치"이지 "가중치 0이면 배치 금지"가 아닙니다. `TEST_PLAN.md`
+   T-001이 정확히 "자유텍스트 없이 생성"이라 리허설에서 바로 드러납니다.
+   → 앵커 조건에서 `__score > 0`을 떼고, 일반 스탑 경로에서도 festival POI를 제외하지 말고
+   **일자 검사만 통과하면 배치 가능**하게 바꿔주세요.
+
+2. **`/generate`가 200으로 준 코스를 저장할 때 400이 남** — `validators.js:42`의 `d.stops.length > 0`
+   검증과 `scoring.js:143-147`이 충돌합니다. POI가 적은 시군에서 긴 일정을 만들면 스탑 0개인 day가
+   생기는데(재현: POI 2건·4일 → `[1,1,0,0]`), 그 응답을 그대로 `POST /api/itineraries`에 보내면
+   `INVALID_STRUCTURED_INPUT`으로 거부됩니다. 지금 시드(시군당 13~14건)로는 안 터지지만 실제
+   TourAPI 데이터가 얇은 시군이 생기면 바로 드러납니다.
+   → `buildItineraryDays`가 빈 day를 만들지 않도록(스탑 없는 날 제거 또는 최소 1개 보장) 고치는 쪽을
+   권합니다. 검증을 느슨하게 푸는 건 8번 항목의 방어선을 약화시키므로 차선입니다.
+
+3. **중복 알림 응답에서 `condition`과 `message`가 어긋남** — `routes/alerts.js:24-27`은 `trigger_type`/
+   `condition`을 **요청값** 그대로 반환하는데, `message.key`는 `alertTrigger.js:85`에서 **기존 alert의**
+   `condition`으로 만듭니다. cron이 rain 알림을 먼저 만들어둔 상태에서 데모 버튼을 traffic으로 누르면
+   `condition:"traffic"` + `message.key:"alert.rain"`인 응답이 나갑니다.
+   → 중복 경로에서는 `existing.trigger_type`/`existing.condition`을 반환하세요.
+
+4. **POI id 미보존 (라운드 1의 P2-10 후속)** — FK는 제거됐지만 `content_id` 기반 upsert가 아니라서
+   재동기화하면 모든 POI의 uuid가 새로 발급됩니다. 그러면 `monitor.js:46`의 `.in('id', poiIds)`가
+   빈 결과를 반환하는데 `poiErr`가 아니라 정상 응답이라 `target=undefined`로 조용히 넘어가고,
+   **rain 트리거가 로그 한 줄 없이 영구 무동작**이 됩니다. `alertTrigger.js:80`의 후보 재조회,
+   `respondToAlert:195`의 `.single()`도 같은 이유로 깨집니다.
+   → PRD 4장에 `pois.content_id`를 추가했습니다. `0002_`로 컬럼 추가 + unique 인덱스, `sync_pois.js`와
+   `seed_pois.js`를 `content_id` 기준 upsert로 변경(시드에도 임의 content_id 부여). 추가로 `monitor.js`가
+   재조회 결과가 0건이면 조용히 넘어가지 말고 경고 로그를 남기게 해주세요.
+
+### P2 — 잔여 개선
+
+5. `directions.js:41-53` `filterWithinDuration`에 동시성 상한이 없어 후보 수만큼 카카오 호출이 동시에
+   나갑니다. 429 위험이 있으니 배치 크기(예: 5개씩)를 두세요.
+6. `itineraries.js:236`, `alertTrigger.js:195`가 `.single()`이라 존재하지 않는 POI id면 500이 납니다.
+   §0.1 기준 `NOT_FOUND`(404)가 맞습니다.
+7. `alerts.js:12`에 `trigger_type`/`condition` enum 검증이 없어 잘못된 값이 오면 DB enum 에러 → 500이
+   됩니다. 400 `INVALID_STRUCTURED_INPUT`으로 막아주세요.
+8. `sync_pois.js`/`sync_medical.js`의 catch가 `err.message`만 찍어서 `fetch failed`밖에 안 보입니다.
+   **`err.cause`까지 로깅**하세요 — 이번 TourAPI 장애 진단에 반나절이 걸린 직접적 원인입니다.
+9. `agent/src/weather.js:3-6` 헤더 주석이 아직 "REGION_GRID를 채우기 전엔 에러를 던진다"로 남아 있는데
+   `:25`에서 kmaGrid로 계산되도록 바뀌었습니다. 주석 갱신.
+10. 시드의 "인제 자작나무숲 단풍축제", "홍천강 억새축제"가 각각 기존 POI(원대리 자작나무숲, 홍천강)와
+    좌표가 완전히 동일해 지도에서 겹칩니다. 좌표를 조금 분리해주세요.
+
+### 의료관광정보 API 스펙 (확정 — 공식 매뉴얼 v4.1 기준, 추측 금지)
+
+현재 `sync_medical.js`는 전부 추측으로 작성돼 있습니다. 아래로 **전면 교체**하세요.
+
+- **base URL**: `https://apis.data.go.kr/B551011/MdclTursmService` (기존 `MedicalTourismService`는 오타)
+- **1단계 `/ldongCode`** — 지역코드 확보(1회성, 결과를 상수로 박아둘 것)
+  - `lDongListYn=N` → 시도 목록이 `{rnum, code, name}`으로 옴. 여기서 강원 `code` 확보
+  - `lDongListYn=Y&lDongRegnCd=<강원코드>` → 시군구 목록이 `{lDongRegnCd, lDongRegnNm, lDongSignguCd,
+    lDongSignguNm}`으로 옴. 인제/홍천/평창의 `lDongSignguCd` 확보
+  - 주의: 이름이 요청 언어로 옴(예: Seoul, Jongno-gu) → 영문명으로 매칭. 시군구 코드는 3자리("110")
+- **2단계 `/areaBasedList`** — 시군별 시설 목록
+  - 파라미터: `serviceKey, numOfRows, pageNo, MobileOS=ETC, MobileApp, langDivCd, arrange=C,
+    lDongRegnCd, lDongSignguCd, _type=json`
+  - **`/detailCommon`은 호출하지 마세요.** 목록 응답에 이미 `tel`, `mapX`, `mapY`, `title`,
+    `baseAddr`가 포함됩니다(매뉴얼 확인 완료). detailCommon은 `overview`/`homepage`만 추가로 줄 뿐입니다.
+  - `/mdclTursmSyncList`는 미러링 유지용이라 이번 스코프 밖입니다.
+- **응답 필드는 camelCase**: `contentId`, `title`, `tel`, `mapX`, `mapY`, `baseAddr`, `detailAddr`,
+  `zipCd`, `mdfcnDt`, `lDongRegnCd`, `lDongSignguCd`.
+  **TourAPI KorService2는 전부 소문자(`contentid`, `mapx`)인데 이 API는 반대입니다** — 라운드 1에서
+  고친 케이싱 버그와 같은 함정이 반대 방향으로 있으니 두 스크립트를 같은 규칙으로 통일하지 마세요.
+- **언어**: `langDivCd`는 ENG/JPN/CHS/RUS만 있고 **한국어가 없습니다.** 시군당 ENG·CHS 2회 호출해
+  `contentId` 기준으로 같은 row에 합치세요. PRD 4장 `care_facilities`에 `name_en`/`name_zh`/
+  `address_en`/`address_zh`/`content_id`/`synced_at`을 반영했습니다(`0002_` 마이그레이션 대상).
+- 응답에 시설 종류 구분이 없으므로 `category`는 일단 `hospital` 고정으로 두고, 필요해지면
+  `/detailMdclTursm`(상세 의료관광 정보)으로 보강하는 걸 검토하세요.
+
+### TourAPI 서버 장애 (진행 중, 백엔드 액션 아님)
+
+`apis.data.go.kr`이 현재 응답하지 않습니다. 진단 결과: DNS 정상(27.101.236.63), 프록시 없음, IPv6 무관,
+**TCP 443 연결은 성공하나 TLS ClientHello 이후 서버 무응답**, 80 포트도 0 bytes. curl/Node/Chrome
+전부 동일하고 유선·핫스팟·LTE 전부 동일하며 `www.data.go.kr`은 정상 접속됩니다 — **API 게이트웨이
+단독 장애로 확정**되었습니다. 승현님이 재시도 및 고객센터 문의 예정입니다.
+따라서 이번 라운드는 **네트워크 호출 없이 코드만 정비**하고, 실호출 검증은 서버 복구 후로 미룹니다.
+시드 데이터(`pois` 39건 / `care_facilities` 15건)는 이미 DB에 적재되어 있으므로 코스 생성·매니징
+개발과 프론트 연동은 지금 그대로 진행 가능합니다.
+
+- 블로커: TourAPI/의료관광정보/기상청 실호출 (서버 장애, 백엔드가 해결 불가)
+- 다음 액션:
+  - 백엔드: 위 P1 → P2 → 의료관광 스펙 순서로 `feat/backend-fixes-round2` 브랜치에 작업 후 PR.
+    완료분은 이 로그에 append.
+  - PM: 라운드 2 PR 재검증. QA 세션 시작 시 이번 P1 4건에 대한 회귀 테스트를 TEST_PLAN에 추가.
+  - 승현님: TourAPI 재시도/고객센터 문의, Supabase Google provider 활성화, 카카오맵 JavaScript 키
+    발급 + 도메인 등록(프론트 착수 전제).
