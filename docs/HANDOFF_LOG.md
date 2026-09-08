@@ -479,6 +479,98 @@ Postgres 원문 누출이 차단된 것도 확인했습니다. **이 항목들�
   - 승현님: TourAPI 재시도/고객센터 문의, Supabase Google provider 활성화, 카카오맵 JavaScript 키
     발급 + 도메인 등록(프론트 착수 전제).
 
+## [2026-09-07 02:00] 백엔드팀 — 라운드 2 수정 완료 (P1 4건 → P2 6건 → 의료관광 API 전면 교체)
+
+`feat/backend-fixes-round2` 브랜치. `0001_init_schema.sql`은 지시대로 손대지 않았고, 스키마 변경은
+전부 `0002_content_id_and_care_i18n.sql`로 새로 작성했습니다. **아직 Supabase에 적용 안 된 상태 —
+SQL Editor에서 실행 필요합니다 (아래 블로커 참고).** "라운드 1 검증 통과" 목록도 손대지 않았습니다.
+
+### P1 (완료, 전부 더미데이터로 재현 후 수정 확인)
+
+1. **자유텍스트 없이 생성 시 축제 미배치**: `scoring.js`의 앵커 조건에서 `__score > 0` 게이트 제거
+   — "일자 검사만 통과하면 배치"가 PRD 3.5절 규칙이지 "가중치 0이면 배치 금지"가 아니라는 지시대로
+   수정. 앵커에 못 든 festival_event도 일반 스탑 풀에서 더는 blanket 제외하지 않고, k-means
+   클러스터링 단계에서만 제외(지리적 편향 방지)한 뒤 클러스터→날짜 배정 이후 `isDateEligible()`로
+   그 날짜와 맞는지 재검증해서 leftover 재분배까지 반영. 재현 테스트: weights 전부 0으로 생성해도
+   09-15/16 축제가 정확히 해당 day에 배치되는 것 확인.
+2. **`/generate` 200 → 저장 400 모순**: `buildItineraryDays`가 스탑 0개인 day를 만들지 않도록 수정
+   — day 번호는 갱기지 않고(달력 날짜 대응 유지) 스탑 없는 날만 결과 배열에서 제외. 재현 테스트:
+   POI 2건·4일 조건에서 예전엔 `[1,1,0,0]`이 나왔는데 이제 `day:1`/`day:2`만 반환되는 것 확인.
+3. **중복 알림의 `condition`/`message` 불일치**: `routes/alerts.js`가 요청값 대신 `result.alert.trigger_type`/
+   `result.alert.condition`(중복이면 기존 alert 값)을 반환하도록 수정.
+4. **POI id 미보존**: `pois.content_id`/`care_facilities.content_id` 추가(`0002_` 마이그레이션,
+   partial unique index — NULL은 유니크 제약 예외). `sync_pois.js`/`seed_pois.js`/`sync_medical.js`/
+   `seed_care.js` 전부 `content_id` 기준 upsert로 전환 + 해당 region의 NULL-content_id 레거시 로우
+   정리 로직 추가. `agent/src/monitor.js`의 `checkRain`이 pois 재조회 결과 0건이면(에러가 아니라
+   정상 빈 응답이라 `poiErr`로 안 걸러짐) 경고 로그를 남기도록 추가.
+
+### P2 (완료)
+
+5. `directions.js`의 `filterWithinDuration`을 5개씩 배치로 나눠 순차 처리하도록 수정(동시성 상한,
+   429 위험 방지).
+6. `.single()` → `.maybeSingle()` + `NOT_FOUND`(404)로 교체 2곳: `itineraries.js` PATCH의
+   `new_poi_id` 조회, `alertTrigger.js` `respondToAlert`의 `proposed_poi_id` 조회. 코드베이스 전체
+   `.single()` 재점검 결과 나머지 2곳(신규 insert 직후 `.select().single()`)은 항상 정확히 1건이
+   반환돼 안전함을 확인.
+7. `routes/alerts.js`에 `trigger_type`/`condition` enum 검증 추가(`alertTrigger.js`에서
+   `ALLOWED_TRIGGER_TYPES`/`ALLOWED_CONDITIONS` export) — 잘못된 값이 Postgres enum 에러로 500
+   나던 것을 400 `INVALID_STRUCTURED_INPUT`으로.
+8. `sync_pois.js`/`sync_medical.js`(+ 김에 `ldong_lookup.js`도 동일 패턴)의 catch에 `err.cause`
+   로깅 추가.
+9. `agent/src/weather.js` 헤더 주석을 kmaGrid 계산 방식 반영해 갱신.
+10. 시드 데이터의 "인제 자작나무숲 단풍축제(데모)"/"홍천강 억새축제(데모)" 좌표를 각각 원대리
+    자작나무숲/홍천강 실제 POI와 겹치지 않도록 약 300m 분리.
+
+### 의료관광정보 API 스펙 전면 교체 (완료, 지시된 확정 스펙 그대로 구현 — 추측 없음)
+
+- `scripts/sync/medical_client.js` 신설: base URL을 `MdclTursmService`로 정정, `/areaBasedList`를
+  시군×언어(ENG/CHS)로 호출, `/detailCommon` 호출 제거, 응답 필드 camelCase(`contentId`/`mapX`/`mapY`)
+  그대로 사용(TourAPI KorService2의 소문자 관례와 통일하지 않음 — 지시대로 반대 방향 케이싱 함정 회피).
+- `scripts/sync/ldong_lookup.js` 신설: `lDongRegnCd`/`lDongSignguCd`는 API 자체 부여 코드라 추측
+  불가(지시 — "추측 금지") — 실제 서비스키로 1회 실행해 값을 확인하는 유틸리티만 준비하고,
+  `medical_client.js`의 `REGION_TO_LDONG`은 `null` placeholder로 남겨뒀습니다. **TourAPI/기상청과
+  같은 서버 장애로 이 세션에서 실행하지 못했습니다 — 서버 복구 후 1회 실행 필요.**
+- `sync_medical.js` 전면 재작성: ENG·CHS 두 번 호출해 `contentId` 기준으로 병합, `content_id` 기준
+  upsert, `category`는 지시대로 `hospital` 고정.
+- `care_facilities` 스키마 개편(`0002_` 마이그레이션): `name` 컬럼 제거, `name_en`/`name_zh`/
+  `address_en`/`address_zh`/`content_id` 추가. `GET /api/care`(`routes/care.js`)도 이 스키마에 맞춰
+  select 컬럼 목록을 갱신했습니다 — **이건 지시 목록엔 없었지만, care_facilities 스키마가 바뀐 이상
+  이 라우트가 그대로면 컬럼 없음 에러로 깨지는 게 확실해서 같이 고쳤습니다.** `lang` 쿼리 파라미터는
+  추가하지 않고 `name_en`/`name_zh` 둘 다 반환 — 프론트가 이미 아는 현재 로케일로 고르면 되므로.
+- `seed/care_seed.json` 재작성: `name_en`/`name_zh`/`address_en`/`address_zh`/`content_id`로 전환.
+  이름은 읍/면/보건지소/보건의료원의 표준 영문·한자 표기로 기계적 번역했고(예: "인제군보건의료원"
+  → "Inje County Public Health Medical Center"/"麟蹄郡保健医疗院"), 주소는 정확한 지번이 없어
+  시군/읍면 단위 일반 주소만 넣었습니다 — 실제 API 데이터가 들어오면 그대로 덮어씀.
+
+### 시드 데이터로 확인한 것 (네트워크 호출 없이)
+
+- `buildItineraryDays()`: weights=0에서도 축제 정확한 날짜에 배치, 얇은 POI 풀에서 빈 day 안 생김,
+  기존(라운드1) 지리적 클러스터링/앵커 배치/rain 후보 제외 전부 회귀 없음 확인.
+  KMA 격자 공식(서울시청 60,127) 회귀 확인.
+- `seed/pois_seed.json`(41건)·`care_seed.json`(15건) JSON 유효성 + `content_id` 전부 유니크 확인.
+- 모든 변경 파일 `node --check` 통과, require 시점 모듈 와이어링(순환참조/오타 없음) 확인.
+- **DB에 실제로 쓰는 것(upsert 동작 자체)은 검증 못 했습니다** — `0002_` 마이그레이션이 아직
+  Supabase에 적용 전이라 `content_id` 컬럼이 없는 상태이고, 이 세션은 SQL을 직접 실행할 권한/경로가
+  없습니다(1주차에도 동일 — Supabase SQL Editor는 사람이 직접 실행).
+
+- 블로커:
+  1. **`0002_content_id_and_care_i18n.sql` 미적용** — Supabase SQL Editor에서 실행 필요. 이게 안 되면
+     `content_id` 컬럼이 없어서 이번에 고친 `sync_pois.js`/`seed_pois.js`/`sync_medical.js`/
+     `seed_care.js`가 전부 실패합니다(컬럼 없음 에러). **적용 전까지는 라운드1 시드(39건 pois, content_id
+     없음)가 그대로 유효하니 코스 생성 데모 자체는 지장 없습니다** — `content_id` 관련 부분만 막힘.
+  2. TourAPI/의료관광정보/기상청 서버 장애 지속 — `ldong_lookup.js` 실행, `sync_pois.js`/
+     `sync_medical.js` 실동기화, 기상청 실호출 검증 전부 서버 복구 후로 미룸.
+  3. API_CONTRACT.md §4 `GET /api/care` 응답 예시가 아직 `name`(단수) 형태로 남아있음 — `name_en`/
+     `name_zh`로 반영 필요 (아래 PM 액션).
+
+- 다음 액션:
+  - 승현님/PM: `server/db/migrations/0002_content_id_and_care_i18n.sql`을 Supabase SQL Editor에서
+    실행. TourAPI/의료관광정보 서버 복구되면 알려주시면 `ldong_lookup.js` 실행 + `sync_pois.js`/
+    `sync_medical.js` 실동기화 진행하겠습니다.
+  - PM: `docs/API_CONTRACT.md` §4 `GET /api/care` 응답 예시를 `name_en`/`name_zh` 필드로 갱신 부탁드립니다.
+  - QA: 이번 P1 4건(축제 무배치/빈 day/중복알림 불일치/POI id 미보존) 회귀 테스트를 TEST_PLAN에
+    추가할 때, 0002 마이그레이션 적용 후 실제 재동기화 시나리오까지 포함해주시면 좋겠습니다.
+
 ## [2026-09-07 02:00] 전략기획팀(PM) — 라운드 2 검증 결과 + 라운드 3 수정 지시
 
 라운드 2(`cd50eb6`)를 항목별로 재검증했습니다. **P1 #1·#3, P2 #5~#10, 의료관광 API 스펙 전면 교체는
@@ -560,3 +652,85 @@ TourAPI 데이터가 부족할 경우의 대응으로 웹 크롤링이 거론되
   - 프론트팀: **`API_CONTRACT.md §1`의 `days` 불변식을 반드시 읽고 시작할 것.** 이 계약이 확정되어
     있으므로 백엔드 라운드 3과 병렬로 UI 착수 가능합니다.
   - PM: 라운드 3 재검증. QA 세션 시작 시 T-101(가중치 편차 실측) 우선 처리.
+
+## [2026-09-07 09:00] 전략기획팀(PM) — 라운드 3 지시서 (최종본, 이전 02:00 항목 대체·확장)
+
+TourAPI 서버가 복구되어 **실호출 검증을 전부 마쳤습니다.** 그 결과 이전 라운드 3 지시(02:00 항목)에
+더해 데이터 전환 작업이 추가됩니다. 브랜치는 `feat/backend-fixes-round3`.
+
+### 실호출로 확정된 사실
+
+- **`serviceKey`가 이중 인코딩되고 있었음 (P0, 아래 1번)** — 세 방식을 비교 실측한 결과:
+  - `URLSearchParams`로 조립(현재 코드) → **HTTP 403 `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`**
+  - URL에 키를 **그대로 붙임 → HTTP 200, 실데이터 정상 수신**
+  - `decodeURIComponent` 후 붙임 → 403
+  발급받은 키가 Encoding 키라 `URLSearchParams`가 한 번 더 인코딩(`%2B`→`%252B`)한 것이 원인.
+- **TourAPI 실데이터 규모 (`areaBasedList2`, `areaCode=32`)**: 인제 94 / 홍천 46 / 평창 122, **총 262건**.
+  콘텐츠타입별 — 인제(관광지 32/문화 8/축제 0/레포츠 7/쇼핑 1/음식 40), 홍천(26/1/0/3/2/10),
+  평창(64/1/2/20/0/22). `sigunguCode`(인제 5·홍천 3·평창 7)는 **정확함**(평창 조회 시 평창 데이터 반환 확인).
+- **TourAPI 축제 데이터는 사실상 없음**: 대상 3개 시군 축제 콘텐츠타입 합계 2건, `searchFestival2`로
+  2026-09 이후 강원 전체 조회 시 0건.
+- **전국문화축제표준데이터에는 2026년 강원 축제 28건이 존재**하며 좌표도 포함. 특히
+  **평창효석문화제 2026-09-04~09-13 (37.61410983, 128.371554)** 확인. 단 과거 연도 로우는 좌표가
+  비어 있는 경우가 많음.
+- **시드의 효석문화제 날짜가 틀렸음**: 시드는 2026-09-10~09-19, 실제는 **2026-09-04~09-13**.
+  (백엔드가 "실제 일정 미확인"으로 남겨둔 항목 — 이제 확정됨. 다만 아래 3번에 따라 시드 자체를 걷어냄.)
+
+### P0 — 실데이터 진입을 막고 있는 것
+
+1. **`serviceKey` 이중 인코딩 수정 (3개 파일 전부)** — `scripts/sync/tourapi_client.js:25`,
+   `scripts/sync/medical_client.js:24`, `agent/src/weather.js:54`가 모두 `serviceKey`를
+   `URLSearchParams`에 넣고 있습니다. **`serviceKey`만 URLSearchParams에서 빼고 URL 문자열에 그대로
+   붙이세요**(나머지 파라미터는 지금처럼 인코딩). 세 API 모두 같은 포털 키 체계라 동일하게 적용됩니다.
+   수정 후 `node sync_pois.js`로 실동기화가 되는 것까지 확인할 것.
+
+### P1 — 데이터 전환
+
+2. **실데이터로 전환하고 시드는 DB에서 제거** (PRD 8장에 방침 반영함) — 실동기화 성공을 확인한 뒤
+   `content_id LIKE 'seed-%'` 로우를 `pois`/`care_facilities`에서 삭제하세요. 시드에는 필터 테스트용
+   가상 축제("인제 자작나무숲 단풍축제", "홍천강 억새축제")가 들어 있어 실데이터와 섞이면 심사에서
+   설명할 수 없습니다. `seed_pois.js`/`seed_care.js` 스크립트는 개발·테스트용으로 남기되 README에
+   "데모 DB에는 적재하지 않음"을 명시할 것.
+   **전환 직후 반드시 확인**: 리허설 문구용 2곳(**월정사 전나무숲길**, **평창무이예술관**)이 실데이터에
+   존재하는지. 없으면 실데이터 중 우천 부적합 야외 스탑 1곳 + 실내 대체 1곳을 골라 후보로 제안해주세요
+   (PM이 11.5절/`TEST_PLAN.md`에 반영합니다).
+   이 전환으로 라운드 3 02:00 항목의 P2 #3(사라진 POI 정리)에서 "시드 예외 처리"는 불필요해집니다 —
+   지역별 `synced_at < 이번 실행 시각` 기준으로 단순하게 정리하면 됩니다.
+
+3. **전국문화축제표준데이터 동기화 추가** (`scripts/sync/sync_festivals.js` 신규, PRD 5장에 반영함)
+   - 인증키/엔드포인트는 `.env`의 `FESTIVAL_SERVICE_KEY`/`FESTIVAL_BASE_URL` (승현님이 발급 완료,
+     `.env.example`에도 키 이름 추가할 것). **1번과 동일하게 키는 인코딩하지 말고 그대로 붙일 것.**
+   - 응답 구조: `body.items.item[]`, 총 1,305건. 지역 파라미터가 없으므로 `numOfRows=1000`으로 2페이지
+     받아 전량 수집 후 주소로 필터.
+   - 필드 매핑: `fstvlNm`→`name`, `fstvlStartDate`→`event_start_date`, `fstvlEndDate`→`event_end_date`,
+     `latitude`→`lat`, `longitude`→`lng`, `rdnmadr`/`lnmadr`→시군 판별(인제/홍천/평창), `tags`는
+     `['festival_event']` 고정.
+   - **좌표가 빈 로우는 반드시 제외**(과거 연도 상당수가 공란). `sync_pois.js`의 `isValidKoreaCoord`를
+     재사용하세요.
+   - **`content_id` 생성 규칙 주의**: 이 데이터셋에는 고유 ID 필드가 없습니다. `insttCode` +
+     `fstvlNm` + `fstvlStartDate`를 조합한 안정적인 키를 만들어 쓰세요(예: `fest-${insttCode}-${해시}`).
+     매 동기화마다 값이 달라지면 upsert가 깨지고 중복이 쌓입니다.
+   - 과거 연도 축제가 다수 포함되지만 코스 배치 시 일자 필터에 걸려 자동 제외되므로 무해합니다.
+
+### P1 — `days` 계약 (02:00 항목과 동일, 프론트 착수 전 필요)
+
+4. `days`는 여행 기간 전 일자를 반환하고 각 날에 `date`(KST `YYYY-MM-DD`)를 포함. 빈 날은 `stops: []`.
+   `validators.js`의 `d.stops.length > 0` 제거하고 구조 검증만. (`API_CONTRACT.md §1` 불변식 참조)
+5. 필터 적용 후 후보가 0건이면 빈 `days`를 200으로 주지 말고 `NO_CANDIDATE`(404).
+
+### P2 (02:00 항목 유지)
+
+6. `0003_fix_content_id_index.sql` 커밋 — 승현님이 이미 Supabase에서 실행한 인덱스 교체(partial unique
+   index의 `where` 절 제거)를 파일로 남겨 DB와 일치시킬 것. `0001`/`0002`는 수정 금지.
+7. `sync_pois.js`/`sync_medical.js`에 지역별 `synced_at` 기준 정리 추가(2번으로 시드 예외는 불필요).
+8. `monitor.js`의 pois 재조회 경고를 "요청 수 ≠ 반환 수"로 확대(현재는 0건일 때만).
+9. `0003` 이후 마이그레이션에 `if not exists`/`if exists` 방어절.
+10. `sync_medical.js`에 좌표 유효성 검증 추가(`"0"` 문자열이 `lat:0`으로 저장되는 것 방지).
+11. `trigger_type`/`condition` 조합 교차검증(`weather`+`festival_cancelled` 같은 모순 조합 차단).
+
+- 블로커: 없음 (서버 복구 완료, 모든 키 확보)
+- 다음 액션:
+  - 백엔드: P0 → P1 → P2 순서. 실동기화 후 **시군별 최종 건수와 카테고리 분포**를 이 로그에 남겨주세요.
+    리허설 장소 2곳 존재 여부도 함께.
+  - PM: 라운드 3 재검증. 리허설 장소 확정되면 11.5절/`TEST_PLAN.md` 갱신.
+  - 프론트팀: `API_CONTRACT.md §1` `days` 불변식 기준으로 착수 가능(백엔드 라운드 3과 병렬).
