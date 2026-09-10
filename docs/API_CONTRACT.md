@@ -268,6 +268,77 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
 
 저장된 일정 조회 (재방문 시). Authorization 필요, 본인 소유 itinerary만 조회 가능.
 
+### `GET /api/itineraries` (마이페이지 목록 — 신규, 1주차 말 확정)
+
+저장한 코스 목록 조회. Authorization 헤더 필수.
+
+**왜 필요한가**: `GET /api/itineraries/:id`는 id를 이미 알아야 부를 수 있는 API라, 로그인한 사용자가
+재방문했을 때 **자기가 저장한 코스로 돌아갈 경로가 없다.** 프론트 랜딩 화면이 "다시 로그인하면 저장한
+코스를 이어볼 수 있어요"를 안내하는 이상 이 목록 엔드포인트가 있어야 그 동선이 성립한다.
+
+**Request**: 파라미터 없음 (Authorization 헤더만)
+
+**Response 200**
+```json
+{
+  "data": {
+    "itineraries": [
+      {
+        "id": "itn_abc123",
+        "region_codes": ["pyeongchang"],
+        "start_date": "2026-09-10",
+        "end_date": "2026-09-12",
+        "companions": 2,
+        "relationship": "couple",
+        "stop_count": 8,
+        "status": "active",
+        "created_at": "2026-09-05T11:20:00+09:00"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+- **`user_id` 스코핑 필수 (P0)**: 서버는 service_role 클라이언트로 조회하므로 RLS가 적용되지 않는다.
+  **반드시 Authorization 토큰에서 검증한 `auth.uid()`로 `where user_id = :uid`를 걸 것** — 빠뜨리면
+  전체 사용자의 일정이 노출되는 IDOR이 된다 (1주차 아키텍처 점검에서 `GET /api/itineraries/:id`에
+  대해 지적했던 것과 동일한 패턴).
+- `status = 'cancelled'`인 row는 응답에서 제외한다.
+- `itinerary_json` **전체는 내려주지 않는다** — 목록 화면에는 스탑 수만 필요하므로 서버가
+  `jsonb` 안의 스탑 개수를 세어 `stop_count`로만 내려준다 (목록 한 번에 수십 KB가 오가는 것 방지).
+- 정렬: `start_date DESC`.
+- **"진행 중 / 지난 여행" 구분은 프론트가 `end_date`로 판정한다.** 서버에 상태 전환 배치를 두지 않는다
+  (아래 상자 참고).
+
+> **`completed` 상태 전환에 배치·cron을 만들지 않는 이유 (확정)**: PRD 4장 status enum에 `completed`
+> (end_date 지남, 감시 제외)가 정의돼 있지만, 이를 위해 매일 도는 전환 작업을 따로 만들 필요가 없다.
+> 실시간 조건 감시 에이전트(PRD 3.6절)는 이미 `status = 'active' AND 오늘 날짜가 start_date~end_date
+> 사이`인 일정만 스캔하므로, **여행이 끝나면 감시는 조건식만으로 자동으로 멈춘다.** 목록 화면의
+> 진행/지난 구분도 `end_date < 오늘`로 계산하면 되므로 DB에 저장된 `status` 값을 바꿀 이유가 없다.
+> 따라서 `completed`는 이번 데모에서 **실제로 기록되지 않는 값**이며, `active`인 채로 기간이 지난
+> 일정을 프론트가 "지난 여행"으로 표시한다.
+
+### `DELETE /api/itineraries/:id` (마이페이지 삭제 — 신규, 1주차 말 확정)
+
+저장한 코스 삭제. Authorization 헤더 필수.
+
+**소프트 삭제다** — row를 제거하지 않고 `status`를 `cancelled`로 UPDATE한다 (PRD 4장 status enum의
+`cancelled` = 사용자 삭제). 이렇게 하는 이유:
+
+- `alerts`가 `itinerary_id`를 FK로 물고 있어(ERD §1) 물리 삭제 시 매니징 로그가 함께 사라진다.
+  알림 발생·응답 기록은 데모 이후 회고 자료이자 3.6절 로직 검증 근거라 남겨두는 편이 낫다.
+- 감시 대상에서는 즉시 빠진다 — 에이전트 스캔 조건이 `status = 'active'`이므로 `cancelled`로 바뀌는
+  순간 자동으로 제외된다. 별도 해제 처리가 필요 없다.
+
+**Response 200**
+```json
+{ "data": { "id": "itn_abc123", "status": "cancelled" }, "error": null }
+```
+
+- 본인 소유가 아니면 `403 FORBIDDEN`, 존재하지 않는 id면 `404 NOT_FOUND` (§0.1).
+- 이미 `cancelled`인 id를 다시 호출해도 `200`으로 같은 응답을 준다 (멱등).
+
 ---
 
 ## 3. 실시간 매니징
@@ -455,15 +526,34 @@ PRD 3.5절 "부분 재구성" 경로 중 **수동 편집 전용** 엔드포인�
 > 관련 요청/응답의 `region_codes[]`(항상 1개만 담김, PRD 3.5절)와 헷갈리지 않도록 이름을 다르게
 > 뒀다 — `region_codes[]=injae` 같은 배열 표기로 보내지 말 것.
 
-**Response 200**
+**Response 200** (수정 — 1주차 말, 데이터 소스 교체에 따라 `name_ko` 추가)
 ```json
 {
   "data": [
-    { "name": "인제 응급의료센터", "category": "hospital", "phone": "033-...", "lat": 0, "lng": 0 }
+    {
+      "name_ko": "인제군보건소",
+      "name_en": null,
+      "name_zh": null,
+      "category": "health_center",
+      "phone": "033-460-2244",
+      "address_ko": "강원특별자치도 인제군 인제읍 ...",
+      "lat": 38.0695,
+      "lng": 128.1707
+    }
   ],
   "error": null
 }
 ```
+
+- **`name_ko`가 주 표시값이다.** 응급의료기관·보건기관 표준데이터가 한국어 명칭만 제공하며, 응급
+  상황에서 외국인에게 실제로 유용한 것도 한국어 상호이기 때문이다(택시 기사·행인에게 보여주는 용도).
+  프론트는 `name_ko`를 크게 보여주고, `name_en`/`name_zh`는 **값이 있을 때만** 아래에 작게 병기한다
+  (대부분 `null`이다 — 의료관광정보 API에서 받은 소수 시설만 채워져 있음). PRD 6장 다국어 키 원칙에
+  대한 의도적 예외이며 근거는 PRD 8장 상자에 기록.
+- `category`는 다국어 키로 처리한다 (`emergency_room` / `health_center` / `health_subcenter` /
+  `hospital`) — UI 라벨은 프론트가 언어별로 렌더링.
+- `phone`이 `null`이면 전화 버튼을 렌더링하지 않는다. **틀린 응급연락처를 보여주느니 없는 편이
+  낫다** (PRD 4장).
 
 SOS 버튼은 별도 API 호출 없이 클라이언트에서 `tel:119` 링크만 연다 (PRD 2.1절).
 
