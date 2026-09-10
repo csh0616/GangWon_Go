@@ -2,19 +2,26 @@
 //
 // 주의: TourAPI는 공공데이터포털 개편에 따라 엔드포인트 버전(KorService1/2 등)이 바뀐 이력이 있다.
 // 이 파일은 TOURAPI_BASE_URL을 env로 오버라이드 가능하게 해뒀으니, 실제 서비스키 발급 후
-// 공공데이터포털 문서의 최신 base URL로 맞춰 확인할 것 (실제 네트워크 호출은 서비스키가 없어
-// 이 세션에서 검증하지 못했음 — docs/HANDOFF_LOG.md 블로커 참고).
+// 공공데이터포털 문서의 최신 base URL로 맞춰 확인할 것.
+//
+// serviceKey 이중 인코딩 주의 (라운드3 P0, 실측으로 확인된 유일한 해법): 공공데이터포털이 발급하는
+// 키는 이미 URL-encode된 "Encoding" 키다. URLSearchParams에 넣으면 그걸 또 한 번 인코딩해서
+// (`%2B` → `%252B`) HTTP 403 SERVICE_KEY_IS_NOT_REGISTERED_ERROR가 난다 — serviceKey는
+// URLSearchParams 밖으로 빼서 URL 문자열에 그대로 붙여야 한다(나머지 파라미터는 그대로 인코딩).
 require('dotenv').config();
 
 const BASE_URL = process.env.TOURAPI_BASE_URL || 'https://apis.data.go.kr/B551011/KorService2';
 const SERVICE_KEY = process.env.TOURAPI_SERVICE_KEY;
 
-// 강원도(areaCode=32) 시군 코드. sigunguCode는 areaCode2 API로 조회 가능한 값이며,
-// 아래는 공개 자료 기준 추정치 — 실제 서비스키로 sigunguCode2 호출해 한 번 검증 필요(HANDOFF_LOG 참고).
+// 강원도(areaCode=32) 시군 코드 — `areaCode2?areaCode=32`를 실제 서비스키로 호출해 확정한 값
+// (라운드3, 이전 추정치는 전부 틀렸었음 — 인제=5는 실제로 속초시, 홍천=3은 동해시, 평창=7은
+// 양양군 데이터였다. "평창" 89건 전부에 대관령/진부/봉평/월정사 등 평창 지명이 단 하나도 없고
+// 양양송이축제/낙산사/남애항처럼 양양 지명만 나오는 것으로 실측 확인). 아래는
+// areaCode2 응답 전체(18개 시군) 중 3곳만 — 나머지는 스코프 밖이라 생략.
 const REGION_TO_SIGUNGU = {
-  injae: { areaCode: 32, sigunguCode: 5 },
-  hongcheon: { areaCode: 32, sigunguCode: 3 },
-  pyeongchang: { areaCode: 32, sigunguCode: 7 },
+  injae: { areaCode: 32, sigunguCode: 10 },
+  hongcheon: { areaCode: 32, sigunguCode: 16 },
+  pyeongchang: { areaCode: 32, sigunguCode: 15 },
 };
 
 async function callTourApi(endpoint, params) {
@@ -22,14 +29,14 @@ async function callTourApi(endpoint, params) {
     throw new Error('TOURAPI_SERVICE_KEY가 설정되지 않았습니다 (.env 확인). 공공데이터포털에서 발급받아야 합니다.');
   }
   const query = new URLSearchParams({
-    serviceKey: SERVICE_KEY,
     MobileOS: 'ETC',
     MobileApp: 'GangwonGo',
     _type: 'json',
     numOfRows: '100',
     ...params,
   });
-  const url = `${BASE_URL}/${endpoint}?${query.toString()}`;
+  // serviceKey는 이미 인코딩된 키라 URLSearchParams를 거치지 않고 그대로 붙인다 (위 헤더 참고)
+  const url = `${BASE_URL}/${endpoint}?serviceKey=${SERVICE_KEY}&${query.toString()}`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`TourAPI 호출 실패: ${endpoint} HTTP ${res.status}`);

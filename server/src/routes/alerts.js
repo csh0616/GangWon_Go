@@ -1,7 +1,13 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const { apiError } = require('../middleware/errorHandler');
-const { createProposedAlert, respondToAlert, ALLOWED_TRIGGER_TYPES, ALLOWED_CONDITIONS } = require('../lib/alertTrigger');
+const {
+  createProposedAlert,
+  respondToAlert,
+  ALLOWED_TRIGGER_TYPES,
+  ALLOWED_CONDITIONS,
+  isValidTriggerConditionPair,
+} = require('../lib/alertTrigger');
 
 const router = express.Router();
 
@@ -18,6 +24,11 @@ router.post('/trigger', requireAuth, async (req, res, next) => {
     }
     if (!ALLOWED_CONDITIONS.includes(condition)) {
       throw apiError(400, 'INVALID_STRUCTURED_INPUT', `condition은 ${ALLOWED_CONDITIONS.join('|')} 중 하나여야 합니다.`);
+    }
+    // 각각은 유효해도 조합이 모순일 수 있다(예: weather+festival_cancelled) — 데모 강제 트리거
+    // 버튼 오조작 방지 차원의 교차검증 (라운드3 점검 #11).
+    if (!isValidTriggerConditionPair(triggerType, condition)) {
+      throw apiError(400, 'INVALID_STRUCTURED_INPUT', `trigger_type "${triggerType}"와 condition "${condition}"의 조합이 유효하지 않습니다.`);
     }
 
     // 1주차 점검 #1 — 소유권 검사 없이 itinerary_id/alert_id만으로 남의 일정을 조회·변경할 수 있었음.

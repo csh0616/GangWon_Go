@@ -2,6 +2,9 @@
 // 구현 (docs/HANDOFF_LOG.md 2026-09-07 00:30 항목, "추측 금지"). TourAPI(KorService2)와 반대로
 // 응답 필드가 camelCase(contentId, mapX, mapY 등)다 — 두 스크립트를 같은 케이싱 규칙으로 통일하면
 // 안 된다(라운드1에서 고친 케이싱 버그와 같은 함정이 반대 방향으로 있음).
+//
+// serviceKey 이중 인코딩 주의 (라운드3 P0) — tourapi_client.js와 동일한 공공데이터포털 키 체계라
+// 같은 문제가 있다: URLSearchParams에 넣으면 이미 인코딩된 키를 또 인코딩해서 403이 난다.
 require('dotenv').config();
 
 const BASE_URL = 'https://apis.data.go.kr/B551011/MdclTursmService';
@@ -9,11 +12,12 @@ const SERVICE_KEY = process.env.MEDICAL_TOURISM_SERVICE_KEY;
 
 // /ldongCode는 API가 자체 부여한 코드라 수식으로 유도하거나 추측할 수 없다(기상청 격자와 다른 점 —
 // 그쪽은 공개된 변환 공식이 있어 kmaGrid.js로 계산했지만, 이건 그런 공식이 없는 순수 조회 전용
-// 코드다). ldong_lookup.js를 실제 서비스키로 1회 실행해서 나온 값을 여기 채워넣을 것.
+// 코드다). ldong_lookup.js를 실제 서비스키로 실행해 확인한 값(라운드3, 2026-09-10 실측) —
+// lDongRegnCd 51 = Gangwon-do, lDongSignguCd는 Inje-gun 810 / Hongcheon-gun 720 / Pyeongchang-gun 760.
 const REGION_TO_LDONG = {
-  injae: { lDongRegnCd: null, lDongSignguCd: null },
-  hongcheon: { lDongRegnCd: null, lDongSignguCd: null },
-  pyeongchang: { lDongRegnCd: null, lDongSignguCd: null },
+  injae: { lDongRegnCd: '51', lDongSignguCd: '810' },
+  hongcheon: { lDongRegnCd: '51', lDongSignguCd: '720' },
+  pyeongchang: { lDongRegnCd: '51', lDongSignguCd: '760' },
 };
 
 async function callMedicalApi(endpoint, params) {
@@ -21,7 +25,6 @@ async function callMedicalApi(endpoint, params) {
     throw new Error('MEDICAL_TOURISM_SERVICE_KEY가 설정되지 않았습니다 (.env 확인).');
   }
   const query = new URLSearchParams({
-    serviceKey: SERVICE_KEY,
     MobileOS: 'ETC',
     MobileApp: 'GangwonGo',
     numOfRows: '100',
@@ -29,7 +32,8 @@ async function callMedicalApi(endpoint, params) {
     _type: 'json',
     ...params,
   });
-  const res = await fetch(`${BASE_URL}/${endpoint}?${query.toString()}`);
+  // serviceKey 이중 인코딩 방지 — URLSearchParams 밖에서 그대로 붙인다 (라운드3 P0, tourapi_client.js와 동일 이유)
+  const res = await fetch(`${BASE_URL}/${endpoint}?serviceKey=${SERVICE_KEY}&${query.toString()}`);
   if (!res.ok) {
     throw new Error(`의료관광정보 API 호출 실패: ${endpoint} HTTP ${res.status}`);
   }
