@@ -159,18 +159,17 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
     }
   });
 
-  // 스탑이 0개인 날은 만들지 않는다 (라운드2 점검 #2) — POI가 얇은 시군에서 긴 일정을 만들면
-  // 생기는데, 그대로 저장하면 validators.js의 itinerary_json 검증(day당 stops>=1)에 걸려 200으로
-  // 받은 코스를 저장할 때 400이 나는 모순이 있었다. day 번호는 갱기지 않고(달력 날짜와의 대응 유지)
-  // 스탑 없는 날만 건너뛴다.
-  return dayPlans
-    .map((dp, idx) => {
-      const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
-      if (stops.length === 0) return null;
-      const ordered = twoOptOptimize(stops, { pinFirst: !!dp.anchor });
-      return { day: idx + 1, stops: ordered.map((p, i) => toStopShape(p, i + 1)) };
-    })
-    .filter(Boolean);
+  // days는 여행 기간 전 일자를 빠짐없이·순서대로 반환한다 — day는 1부터 연속, date는 KST
+  // YYYY-MM-DD (API_CONTRACT.md §1 "days 배열 불변식", 라운드3 점검 #4). 라운드2에서 스탑 0개인
+  // day를 배열에서 아예 빼는 방식으로 고쳤었는데, 그러면 day 번호에 구멍이 생겨 프론트가 방어
+  // 코드를 짜야 하고(3일 여행에 [{day:3}]만 오는 경우가 실제 확인됨) 날짜를 클라이언트가
+  // 재계산하면서 KST 버그가 화면단에서 되살아난다. 추천할 장소가 없는 날은 stops:[]로 그대로
+  // 반환 — "200으로 준 코스가 저장 시 400" 불일치는 validators.js 쪽 완화로 별도 해결(§ 관련 커밋).
+  return dayPlans.map((dp, idx) => {
+    const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
+    const ordered = twoOptOptimize(stops, { pinFirst: !!dp.anchor });
+    return { day: idx + 1, date: dp.date.toISOString().slice(0, 10), stops: ordered.map((p, i) => toStopShape(p, i + 1)) };
+  });
 }
 
 /**

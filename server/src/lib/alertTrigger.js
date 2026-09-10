@@ -28,6 +28,18 @@ const MESSAGE_KEY_BY_CONDITION = {
 const ALLOWED_TRIGGER_TYPES = ['weather', 'traffic', 'festival'];
 const ALLOWED_CONDITIONS = Object.keys(MESSAGE_KEY_BY_CONDITION);
 
+// trigger_type/condition은 각각은 유효해도 조합이 말이 안 될 수 있다(예: weather+festival_cancelled) —
+// PRD 3.5절 상황별 조정표의 실제 짝만 허용 (라운드3 점검 #11, 데모 트리거 버튼 오조작 방지).
+const VALID_TRIGGER_CONDITION_PAIRS = {
+  weather: ['rain'],
+  traffic: ['traffic'],
+  festival: ['festival_cancelled'],
+};
+
+function isValidTriggerConditionPair(triggerType, condition) {
+  return (VALID_TRIGGER_CONDITION_PAIRS[triggerType] || []).includes(condition);
+}
+
 function buildMessagePayload(condition, previousName, candidateName) {
   return {
     key: MESSAGE_KEY_BY_CONDITION[condition] || 'alert.generic',
@@ -243,4 +255,11 @@ async function dismissExpiredProposals() {
   return data;
 }
 
-module.exports = { createProposedAlert, respondToAlert, dismissExpiredProposals, ALLOWED_TRIGGER_TYPES, ALLOWED_CONDITIONS };
+module.exports = {
+  createProposedAlert,
+  respondToAlert,
+  dismissExpiredProposals,
+  ALLOWED_TRIGGER_TYPES,
+  ALLOWED_CONDITIONS,
+  isValidTriggerConditionPair,
+};

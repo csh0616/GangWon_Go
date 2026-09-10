@@ -1,5 +1,10 @@
-// PRD 8장 — 1주차 목업(seed) POI 데이터 로더. TourAPI 실동기화 전 프론트 작업을 막지 않기 위함.
-// 스키마는 sync_pois.js와 동일해서, 나중에 실제 동기화가 이 데이터를 그대로 덮어쓴다.
+// PRD 8장 — 1주차 목업(seed) POI 데이터 로더. TourAPI 실동기화 전 프론트 작업을 막지 않기 위함이었다.
+//
+// **데모 DB에는 적재하지 않음 (라운드3, PRD 8장 "시드 → 실데이터 전환" 방침 확정)** — 실동기화 성공
+// 확인 후(인제 61/홍천 80/평창 83건, 2026-09-10) 시드는 DB에서 이미 제거되었다. 시드엔 필터 테스트용
+// 가상 축제("인제 자작나무숲 단풍축제", "홍천강 억새축제" 등)가 섞여 있어 실데이터와 함께 있으면
+// 심사에서 "이 축제가 실제로 있느냐" 질문에 답할 수 없다. 이 스크립트 자체는 개발·테스트(로컬 DB,
+// 오프라인 시나리오 등)용으로만 남겨둔다 — 실행하면 다시 섞이니 데모 직전엔 실행하지 말 것.
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -24,9 +29,12 @@ async function main() {
   );
   if (upsertErr) throw upsertErr;
 
-  // 0001 시절 content_id 없이 들어간 레거시 로우 정리 (해당 region만)
-  const { error: deleteErr } = await supabase.from('pois').delete().in('region_code', regionCodes).is('content_id', null);
-  if (deleteErr) throw deleteErr;
+  // 주의: sync_pois.js(실동기화)와 달리 이 스크립트는 synced_at 기준 정리를 하지 않는다 — 그렇게
+  // 하면 실데이터로 전환한 뒤 이 스크립트를 실수로 돌렸을 때 "이번 시드 목록보다 오래된" 실데이터가
+  // 전부 삭제돼버린다(실데이터의 synced_at이 항상 더 예전이므로). content_id가 겹치지만 않으면
+  // upsert도 실데이터를 건드리지 않으므로, 정리 없이 두는 쪽이 더 안전하다 — 이 스크립트가
+  // "데모 DB에는 적재하지 않음"으로 격하된 이상, 남아있는 레거시 로우 정리는 더 이상 이 스크립트의
+  // 책임이 아니다.
 
   console.log(`[seed_pois] ${rows.length}건 시드 완료 (${regionCodes.join(', ')})`);
 }

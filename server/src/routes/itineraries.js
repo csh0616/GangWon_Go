@@ -54,6 +54,17 @@ router.post('/generate', async (req, res, next) => {
     }
 
     const days = buildItineraryDays({ pois: filteredPois, weights, activityLevel, startDate, endDate });
+
+    // 필터 적용 후(특히 festival_event 날짜 필터) 스탑이 하나도 안 남으면 빈 days를 200으로 주지
+    // 않고 NO_CANDIDATE로 막는다 — 예: 그 시군 POI가 전부 "여행 기간 밖 축제"인 경우, 위 두 가드는
+    // 통과하지만 buildItineraryDays 내부의 날짜 필터에서 풀이 비어 모든 day가 stops:[]로만 채워질
+    // 수 있었다(라운드3 점검 #5). 일부 날짜만 비는 경우는 정상 200(§1 days 불변식)이므로, 전체
+    // 합계가 0일 때만 에러로 다룬다.
+    const totalStops = days.reduce((sum, d) => sum + d.stops.length, 0);
+    if (totalStops === 0) {
+      throw apiError(404, 'NO_CANDIDATE', '조건에 맞는 POI 후보가 없습니다.');
+    }
+
     const narration = await generateNarration(days);
 
     res.status(200).json({

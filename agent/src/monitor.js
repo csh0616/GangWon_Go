@@ -48,15 +48,16 @@ async function checkRain(itinerary, dayEntry) {
     console.warn('[monitor] 스탑 태그 조회 실패, 이번 주기는 건너뜀:', poiErr.message);
     return;
   }
-  // poiRows가 0건이면 조용히 넘어가지 않는다 (라운드2 점검 #4) — poi_id가 최신 pois와 하나도 안
-  // 맞는다는 뜻이라, 재동기화가 content_id 기반 upsert 없이 돌아서 uuid가 갈렸을 가능성이 높다.
-  // 에러가 아니라 정상 응답(빈 배열)이라 poiErr로는 안 걸러지므로 여기서 별도로 경고를 남긴다.
-  if (poiRows.length === 0) {
+  // 요청 id 수와 반환 건수가 다르면 경고한다 (라운드3 점검 #8 — 이전엔 0건일 때만 경고해서, 4스탑 중
+  // 3건만 매칭되는 부분 불일치는 조용히 넘어갔다). poi_id가 최신 pois와 안 맞는다는 뜻이라, 재동기화가
+  // content_id 기반 upsert 없이 돌아서 uuid가 갈렸을 가능성이 높다. 에러가 아니라 정상 응답(부분/빈
+  // 배열)이라 poiErr로는 안 걸러지므로 여기서 별도로 확인한다.
+  if (poiRows.length !== poiIds.length) {
     console.warn(
-      `[monitor] itinerary ${itinerary.id} day ${dayEntry.day}: pois 재조회 결과 0건 — poi_id가 최신 pois와 하나도 안 맞습니다 (재동기화가 content_id 기반 upsert로 됐는지 확인 필요).`
+      `[monitor] itinerary ${itinerary.id} day ${dayEntry.day}: pois 재조회 ${poiIds.length}건 요청 → ${poiRows.length}건 응답 (일부 poi_id가 최신 pois와 안 맞음 — 재동기화가 content_id 기반 upsert로 됐는지 확인 필요).`
     );
-    return;
   }
+  if (poiRows.length === 0) return;
   const tagsById = new Map(poiRows.map((p) => [p.id, p.tags || []]));
   const target = dayEntry.stops.find((s) => (tagsById.get(s.poi_id) || []).some((tag) => RAIN_TAGS.includes(tag)));
   if (!target) return;
@@ -108,7 +109,9 @@ async function scanAndTrigger() {
     try {
       const dayIndex = tripDayIndex(itinerary.start_date);
       const dayEntry = itinerary.itinerary_json?.days?.find((d) => d.day === dayIndex);
-      if (!dayEntry) continue; // eslint-disable-line no-continue
+      // days 배열이 전 일자를 반환하게 되면서(API_CONTRACT.md §1 불변식, 라운드3) stops:[]인 날이
+      // 정상적으로 존재한다 — 스탑이 없으면 감시할 것도 없으므로 건너뛴다(경고 아님, 정상 상태).
+      if (!dayEntry || dayEntry.stops.length === 0) continue; // eslint-disable-line no-continue
 
       // eslint-disable-next-line no-await-in-loop
       await checkRain(itinerary, dayEntry);

@@ -4,28 +4,18 @@ require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const { fetchAreaBasedList, fetchFestivalDates } = require('./tourapi_client');
 const { mapTourApiCategory } = require('./category_mapping');
+const { isValidKoreaCoord } = require('./geo_validate');
 
 const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
-// 대한민국 대략 경계 — (0,0) 등 좌표 누락/파싱 실패 로우를 걸러내기 위한 sanity check (1주차 점검 #14)
-const KOREA_LAT_RANGE = [33, 39];
-const KOREA_LNG_RANGE = [124, 132];
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-function isValidKoreaCoord(lat, lng) {
-  return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= KOREA_LAT_RANGE[0] &&
-    lat <= KOREA_LAT_RANGE[1] &&
-    lng >= KOREA_LNG_RANGE[0] &&
-    lng <= KOREA_LNG_RANGE[1]
-  );
-}
-
 async function syncRegion(regionCode) {
+  // 이 지역의 요청 시작 전 시각 — 아래 정리 단계의 기준선(이 시각보다 오래된 로우는 이번 목록에
+  // 없었다는 뜻이므로 삭제 대상).
+  const syncStartedAt = new Date().toISOString();
   const rawItems = await fetchAreaBasedList(regionCode);
   const rows = [];
 
@@ -65,7 +55,7 @@ async function syncRegion(regionCode) {
       tags: [tag],
       event_start_date: eventStartDate,
       event_end_date: eventEndDate,
-      synced_at: new Date().toISOString(),
+      synced_at: syncStartedAt,
     });
   }
 
@@ -80,9 +70,12 @@ async function syncRegion(regionCode) {
   const { error: upsertErr } = await supabase.from('pois').upsert(rows, { onConflict: 'content_id' });
   if (upsertErr) throw upsertErr;
 
-  // 0001 스키마 시절(content_id 없음) 또는 이전 delete+insert 잔여로 남은 이 지역의 NULL-content_id
-  // 로우 정리 — 위 upsert와 별개 로우라 자동으로 안 없어진다.
-  const { error: cleanupErr } = await supabase.from('pois').delete().eq('region_code', regionCode).is('content_id', null);
+  // 이 지역에서 이번 목록에 없었던(= synced_at이 이번 실행보다 오래된) 로우 정리 (라운드3 점검 #7).
+  // upsert 전환 이후 TourAPI 목록에서 사라진 POI(폐업/종료된 축제 등)가 영구히 남아 계속 코스에
+  // 배치되는 문제가 있었다 — NULL-content_id 로우만 지우던 이전 방식으로는 못 잡았다. 시드
+  // 로우(content_id가 'seed-'로 시작)도 이번 실행 기준 더 오래된 synced_at이라 자동으로 함께
+  // 정리된다(PRD 8장 실데이터 전환 방침과 결과적으로 일치 — 다만 최초 전환은 명시적으로 한 번 확인).
+  const { error: cleanupErr } = await supabase.from('pois').delete().eq('region_code', regionCode).lt('synced_at', syncStartedAt);
   if (cleanupErr) throw cleanupErr;
 
   console.log(`[sync_pois] ${regionCode}: ${rows.length}건 동기화 완료`);

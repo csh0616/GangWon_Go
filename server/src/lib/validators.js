@@ -33,13 +33,16 @@ function isValidCompanions(companions) {
 }
 
 // PRD 3.5절 itinerary_json.days 구조 검증 — 저장 시점에 막아야 감시 에이전트가 안전하다 (1주차 점검 #8).
+// API_CONTRACT.md §1 "days 배열 불변식"(라운드3) — days는 {day, date, stops[]} 구조만 검증하고
+// stops가 빈 날(추천할 장소가 없는 날)은 정상으로 허용한다. `d.stops.length > 0` 요구를 걸었더니
+// buildItineraryDays()가 200으로 준 코스를 그대로 저장할 때 400이 나는 모순이 있었다(라운드3 점검 #4).
 function isValidItineraryJson(itineraryJson) {
   if (!itineraryJson || !Array.isArray(itineraryJson.days) || itineraryJson.days.length === 0) return false;
   return itineraryJson.days.every(
     (d) =>
       Number.isInteger(d.day) &&
+      isValidDateString(d.date) &&
       Array.isArray(d.stops) &&
-      d.stops.length > 0 &&
       d.stops.every((s) => typeof s.poi_id === 'string' && s.poi_id.length > 0)
   );
 }
