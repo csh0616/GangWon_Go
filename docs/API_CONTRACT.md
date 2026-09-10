@@ -15,7 +15,10 @@
 - 인증: Google 로그인 이후의 요청은 Supabase Auth 세션 토큰을 `Authorization: Bearer <token>` 헤더로 전달.
   로그인 전(게스트) 요청은 인증 헤더 없이 호출 가능 (PRD 3.9절).
 - 모든 응답은 `{ data, error }` 형태로 통일 (성공 시 `error: null`, 실패 시 `data: null` + 에러코드/메시지).
-- 언어: 요청에 `lang` 파라미터(`en` | `zh`)를 포함. 그 외 값은 400 에러 (PRD 2.3절, 언어는 영/중만 지원).
+- 언어: 요청에 `lang` 파라미터(`ko` | `en` | `zh`)를 포함. 그 외 값은 400 에러.
+  **`ko`가 추가된 이유 (수정 — 1주차 말)**: 초안은 `en`/`zh`만 받았는데, 서비스 기본 언어가 한국어이고
+  한국어 화면도 서버가 만든 문구(코스 요약·스탑 설명·알림 메시지)를 그대로 쓴다. PRD 2.3절의
+  "영/중 2개만 지원"은 **한국어 외 추가 언어가 2개**라는 뜻이며 한국어를 제외한다는 뜻이 아니다.
 - **CORS**: 프론트(Vercel 도메인)와 로컬 개발 주소(`localhost:3000` 등)만 허용 origin으로 등록. 백엔드팀이
   1주차 Express 세팅 시 `cors` 미들웨어에 허용 목록을 넣어둘 것 (PRD 6장). 실제 Vercel 도메인은 배포
   후 `HANDOFF_LOG.md`에 공유.
@@ -29,8 +32,8 @@
 
 | code | HTTP | 발생 조건 |
 |---|---|---|
-| `INVALID_STRUCTURED_INPUT` | 400 | 필수값 누락/형식 오류. 날짜 형식(`YYYY-MM-DD`), `end_date >= start_date`, `region_codes` 1개, `relationship` enum, `companions >= 1`, 여행 기간 상한(10일) 검증 포함 |
-| `INVALID_LANG` | 400 | `lang`이 `en`/`zh`가 아님 |
+| `INVALID_STRUCTURED_INPUT` | 400 | 필수값 누락/형식 오류. 날짜 형식(`YYYY-MM-DD`), `end_date >= start_date`, `region_codes`(빈 배열=어디든지 / 1~3개, 일수 이하), `relationship` enum, `companions >= 1`, 여행 기간 상한(10일) 검증 포함 |
+| `INVALID_LANG` | 400 | `lang`이 `ko`/`en`/`zh`가 아님 |
 | `NO_POI_DATA` | 404 | 요청한 시군의 `pois`가 **0건**. 관계 필터 등으로 후보가 걸러져 비게 된 경우는 이 코드가 아니라 `NO_CANDIDATE`를 쓴다 (프론트 안내 문구가 다르기 때문) |
 | `NO_CANDIDATE` | 404 | POI는 있으나 필터(관계/축제 날짜/우천 제외/거리) 적용 후 남은 후보가 없음 |
 | `AUTH_REQUIRED` | 401 | Authorization 헤더 없음/만료/검증 실패 |
@@ -62,13 +65,18 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
 }
 ```
 
-**`region_codes` — 다중 시군 허용 (수정, 1주차 말 확정)**: 열려 있는 시군(`injae`/`hongcheon`/
-`pyeongchang`) 중 **1~3개**를 담을 수 있다. 여러 개가 오면 서버가 **시군을 날짜에 배정한 뒤 각 날은
-배정된 단일 시군 안에서만** 코스를 만든다 (PRD 3.5절 0단계). 검증 규칙:
+**`region_codes` — 다중 시군 + 자동 선택 (수정, 1주차 말 확정)**: 열려 있는 시군(`injae`/`hongcheon`/
+`pyeongchang`) 중 **1~3개**를 담거나, **빈 배열 `[]`("어디든지")** 을 보낼 수 있다.
 
-- 길이 1 이상, **`region_codes.length <= 여행 일수`**. 초과 시 400 `INVALID_STRUCTURED_INPUT`
-  (예: 2일 여행에 3개 시군). 에러 메시지에 "여행 일수보다 많은 시군은 고를 수 없어요"에 해당하는
-  코드를 실어 프론트가 안내할 수 있게 한다.
+**빈 배열 = "어디든지"**: 사용자가 시군을 고르지 않은 것이며, 서버가 `free_text`에서 뽑은 가중치에
+가장 잘 맞는 시군을 골라준다 (PRD 3.5절 2.4단계). 고른 결과는 응답의 `days[].region_code`와
+`selected_regions`로 확인할 수 있다.
+
+- **빈 배열인데 `free_text`도 비어 있으면 400 `INVALID_STRUCTURED_INPUT`.** 가중치가 전부 0이라
+  시군을 고를 근거 자체가 없다. 프론트는 자유 텍스트가 비어 있을 때 "어디든지" 선택지를 **비활성화**해
+  이 요청이 애초에 나가지 않게 한다 (근거 없이 아무 시군이나 골라놓고 추천인 척하지 않는다).
+- 값이 있을 때는 **`region_codes.length <= 여행 일수`**. 초과 시 400 `INVALID_STRUCTURED_INPUT`
+  (예: 2일 여행에 3개 시군). 프론트가 "여행 일수보다 많은 시군은 고를 수 없어요"로 안내한다.
 - 중복 값이 오면 중복을 제거한 뒤 위 규칙을 적용한다.
 - 열려 있지 않은 시군 코드가 오면 400 `INVALID_STRUCTURED_INPUT`.
 
@@ -153,6 +161,16 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
          "required": ["ko", "en", "zh"],
          "additionalProperties": false
        },
+       "region_reason": {
+         "type": "object",
+         "properties": {
+           "ko": { "type": ["string", "null"] },
+           "en": { "type": ["string", "null"] },
+           "zh": { "type": ["string", "null"] }
+         },
+         "required": ["ko", "en", "zh"],
+         "additionalProperties": false
+       },
        "blurbs": {
          "type": "array",
          "items": {
@@ -168,7 +186,7 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
          }
        }
      },
-     "required": ["narration", "blurbs"],
+     "required": ["narration", "region_reason", "blurbs"],
      "additionalProperties": false
    }
    ```
@@ -200,24 +218,40 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
           "stops": [
             {
               "poi_id": "poi_123",
-              "name": "월정사 전나무숲길",
+              "name": {
+                "ko": "월정사 전나무숲길",
+                "en": "Woljeongsa Fir Forest Trail",
+                "zh": "月精寺冷杉林道"
+              },
               "category": "nature_hiking",
               "is_indoor": false,
               "lat": 37.7318,
               "lng": 128.5926,
               "order": 1,
-              "blurb": { "ko": "천년 전나무가 늘어선 1km 흙길", "en": null, "zh": null },
+              "blurb": {
+                "ko": "천년 전나무가 늘어선 1km 흙길",
+                "en": "A 1km path through thousand-year-old firs",
+                "zh": "穿过千年冷杉的1公里林间小路"
+              },
               "travel_from_prev": null
             },
             {
               "poi_id": "poi_456",
-              "name": "평창무이예술관",
+              "name": {
+                "ko": "평창무이예술관",
+                "en": "Pyeongchang Mui Art Museum",
+                "zh": "平昌武夷艺术馆"
+              },
               "category": "culture_history",
               "is_indoor": true,
               "lat": 37.5891,
               "lng": 128.3742,
               "order": 2,
-              "blurb": { "ko": "옛 분교를 고친 미술관", "en": null, "zh": null },
+              "blurb": {
+                "ko": "옛 분교를 고친 미술관",
+                "en": "A former village school turned art museum",
+                "zh": "由旧分校改建的美术馆"
+              },
               "travel_from_prev": { "mode": "car", "minutes": 28 }
             }
           ]
@@ -231,10 +265,16 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
       ],
       "narration": {
         "ko": "전나무 숲길에서 시작해 오후엔 실내로 옮겨가는, 걷는 속도가 느린 3일이에요.",
-        "en": null,
-        "zh": null
+        "en": "Start on the fir-lined path, then move indoors for the afternoon — three days paced for slow walking.",
+        "zh": "从冷杉林道开始，午后转入室内 —— 以缓慢的步调安排的三天。"
+      },
+      "region_reason": {
+        "ko": "숲길과 조용한 전시를 원하셔서 평창과 홍천을 골랐어요.",
+        "en": "You asked for forest trails and quiet exhibitions, so we picked Pyeongchang and Hongcheon.",
+        "zh": "您想要林间小路和安静的展览，所以我们选择了平昌和洪川。"
       }
     },
+    "selected_regions": { "auto": true, "region_codes": ["pyeongchang", "hongcheon"] },
     "preference_weights": {
       "nature_hiking": 0.8, "onsen_wellness": 0.6, "culture_history": 0.2,
       "food_local": 0.5, "festival_event": 0.3, "shopping": 0.1, "leisure_sports": 0.4
@@ -250,6 +290,19 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
 아래 네 가지는 **화면이 이미 그리고 있는데 계약에 없던 값들**이다. 없으면 스탑 카드의 절반이 빈 채로
 렌더링된다.
 
+**`name` — 스탑 이름 (`{ko, en, zh}`) ⚠ 기존 문자열에서 객체로 변경**
+
+기존에는 `"name": "월정사 전나무숲길"` 문자열이었다. **다국어 정밀 지도가 Must-have인데 장소명 다국어가
+데이터에 없어서, 언어를 전환해도 스탑 카드와 지도 마커가 전부 한국어로 남는 문제가 있었다.**
+
+- 값은 `pois.name` / `pois.name_en` / `pois.name_zh`를 그대로 옮긴 것이다. **런타임 번역이 아니라 배치
+  동기화 시 1회 생성된 값**이므로, 같은 장소는 언제 조회해도 같은 영문명이 나온다 (PRD 8장 상자).
+- **`ko`는 항상 채워져 있다** (TourAPI 원본). `en`/`zh`는 생성 실패 시 `null`일 수 있다.
+- **프론트는 선택 언어 명칭을 주 표시값으로, 한국어 원문을 그 아래 작게 병기한다.** 여행자가 현지
+  표지판과 대조하거나 길을 물을 때 필요한 게 한국어 원문이고, 번역이 틀렸을 때도 원문이 함께 보이면
+  치명적이지 않다. **지도 마커는 공간이 없으므로 선택 언어 하나만** 표시한다.
+- 선택 언어 값이 `null`이면 한국어만 표시한다 (병기 줄을 비워두지 않는다).
+
 **`blurb` — 스탑 한 줄 설명 (`{ko, en, zh}`)**
 
 `pois` 테이블에도 TourAPI `areaBasedList` 응답에도 설명 필드가 없다. **`narration`을 만드는 LLM
@@ -261,7 +314,10 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
   수 없고 변하는 정보 금지**(할루시네이션이 그대로 화면에 나간다).
 - LLM 호출 실패 시 **전 스탑 `null`** 로 두고 코스는 정상 반환한다(PRD 3.7절). 프론트는 `blurb`가
   `null`이면 그 줄을 아예 렌더링하지 않는다 — 자리를 비워두거나 대체 문구를 넣지 않는다.
-- 요청 `lang`에 해당하는 키와 `ko`만 채워지고 나머지는 `null`이다.
+- **`ko`/`en`/`zh` 세 언어를 모두 생성한다 (수정 — 요청 `lang`만 채우던 초안 폐기).** 요청 언어만
+  채우면 사용자가 화면에서 언어를 전환했을 때 설명과 요약이 전부 사라진다 — 이미 만든 코스를 위해
+  LLM을 다시 부를 수는 없기 때문이다. 40자짜리 한 줄 × 스탑 수 × 3언어이므로 출력량이 작아
+  3초 예산에 영향을 주지 않는다.
 
 **`travel_from_prev` — 이전 스탑에서의 이동 (`{mode, minutes}` 또는 `null`)**
 
@@ -276,6 +332,22 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
 (`culture_history`에도 야외 유적이 있다). `pois.is_indoor` 컬럼을 신설해 동기화 시 콘텐츠타입 +
 카테고리 매핑 규칙으로 채운다 (PRD 4장). **rain 트리거의 후보 제외 로직은 지금처럼 카테고리 기준을
 유지한다** — `is_indoor`는 표시용이며, 판정 근거를 두 개로 나누면 화면과 로직이 어긋난다.
+
+**`selected_regions` — 서버가 고른 시군 (`{auto, region_codes}`)**
+
+`auto`는 "어디든지"로 서버가 골랐는지(`true`) 사용자가 직접 골랐는지(`false`)를 나타내고,
+`region_codes`는 최종적으로 쓰인 시군 목록이다. 프론트는 `auto: true`일 때 아래 `region_reason`을
+함께 보여준다. 사용자가 직접 고른 경우엔 요청값과 같으므로 별도 표시가 필요 없다.
+
+**`narration.region_reason` — 시군을 그렇게 고른 이유 (`{ko, en, zh}`)**
+
+**"어디든지"로 서버가 지역을 골랐는데 이유가 안 보이면 사용자가 결과를 납득하지 못한다.** 코스 결과
+상단에 "숲길과 조용한 전시를 원하셔서 평창과 홍천을 골랐어요" 형태로 한 줄 표시한다.
+
+- `narration`을 만드는 같은 LLM 호출에서 3개 언어로 함께 받는다 (추가 호출 없음).
+- **사용자가 시군을 직접 고른 경우(`selected_regions.auto === false`)엔 생성하지 않고 `null`** —
+  사용자가 고른 것을 시스템이 골라준 것처럼 말하면 안 된다.
+- 생성 실패 시 `null`. 프론트는 그 줄을 렌더링하지 않는다.
 
 **`days[].region_code` — 그 날에 배정된 시군**
 
@@ -469,7 +541,11 @@ LLM은 자유 텍스트 파싱 + 내레이션에만 관여한다. 코스 구조�
   "proposed_stop": {
     "day": 2,
     "previous_poi_id": "poi_odaesan_hiking",
-    "candidate_poi": { "poi_id": "poi_alpensia", "name": "...", "category": "...", "lat": 0, "lng": 0 }
+    "candidate_poi": {
+      "poi_id": "poi_alpensia",
+      "name": { "ko": "...", "en": "...", "zh": "..." },
+      "category": "...", "is_indoor": true, "lat": 0, "lng": 0
+    }
   },
   "triggered_at": "2026-09-01T13:00:00Z"
 }
@@ -584,7 +660,12 @@ PRD 3.5절 "부분 재구성" 경로 중 **수동 편집 전용** 엔드포인�
 {
   "data": {
     "candidates": [
-      { "poi_id": "poi_alpensia", "name": "...", "category": "...", "lat": 0, "lng": 0 }
+      {
+        "poi_id": "poi_alpensia",
+        "name": { "ko": "...", "en": "...", "zh": "..." },
+        "category": "...", "is_indoor": true, "lat": 0, "lng": 0,
+        "blurb": { "ko": "...", "en": "...", "zh": "..." }
+      }
     ]
   },
   "error": null
