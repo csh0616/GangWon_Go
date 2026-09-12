@@ -15,7 +15,9 @@ export function CareFacilityCard({
   categoryLabel: string;
 }) {
   const locale = useLocale() as UiLocale;
-  const localizedName = locale === "zh" ? facility.name_zh : facility.name_en;
+  // 병행 표기는 "한국어 + 사용자 언어"용이다(API_CONTRACT.md §4) — 사용자 언어가 이미
+  // 한국어면 병기할 대상이 없다(design/artboards/Care.dc.html에도 병기 줄이 없음)
+  const localizedName = locale === "ko" ? null : locale === "zh" ? facility.name_zh : facility.name_en;
 
   return (
     <div className="flex items-center gap-3 py-3.5">

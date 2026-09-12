@@ -19,11 +19,13 @@ export function LoadingScreen({ request }: { request: GenerateRequest }) {
 
   const isAuto = request.region_codes.length === 0;
   const isMulti = request.region_codes.length > 1;
+  const regionSeparator = locale === "ko" ? " · " : locale === "zh" ? "、" : " & ";
+  const regionList = request.region_codes.map((r) => tr(r)).join(regionSeparator);
 
   const title = isAuto
     ? t("titleAuto")
     : isMulti
-      ? t("titleMulti", { regions: request.region_codes.map((r) => tr(r)).join(locale === "zh" ? "、" : " & ") })
+      ? t("titleMulti", { regions: regionList })
       : t("titleSingle", { region: tr(request.region_codes[0]) });
 
   return (
@@ -43,7 +45,7 @@ export function LoadingScreen({ request }: { request: GenerateRequest }) {
         </div>
 
         <div className="mt-[30px] rounded-2xl bg-bg-subtler px-[18px] py-1">
-          <Row label={t("rowRegion")} value={isAuto ? t("rowRegionPending") : request.region_codes.map((r) => tr(r)).join(", ")} />
+          <Row label={t("rowRegion")} value={isAuto ? t("rowRegionPending") : regionList} />
           <Row label={t("rowDate")} value={formatDateRange(request.start_date, request.end_date, locale)} />
           <Row label={t("rowPeople")} value={`${request.companions}`} />
           {request.free_text && (

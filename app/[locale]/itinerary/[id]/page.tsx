@@ -83,7 +83,7 @@ export default function ItineraryPage() {
       {showToast && <SavedToast />}
       {appliedName && (
         <div className="flex h-[38px] items-center justify-center bg-brand-bg px-4 text-center text-[12.5px] font-semibold text-brand-hover">
-          {tm("appliedBadgePrefix")} {appliedName} {tm("appliedBadgeSuffix")}
+          {tm("appliedToast", { name: appliedName })}
         </div>
       )}
       <div className="flex-grow">
