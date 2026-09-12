@@ -1,0 +1,171 @@
+import type { CareFacility, RegionCode } from "../types";
+
+/**
+ * GET /api/care?region_code= 목업 (docs/API_CONTRACT.md §4). 시군당 5건 이상.
+ * name_en이 null인 시설(의도적 결함, 번역 미생성 케이스)과 phone이 null인 시설(전화 버튼 숨김 검증용)을
+ * 일부러 섞어둔다.
+ */
+export const MOCK_CARE: Record<OpenRegion, CareFacility[]> = {
+  injae: [
+    {
+      name_ko: "인제군보건소",
+      name_en: "Inje County Health Center",
+      name_zh: "麟蹄郡保健所",
+      category: "health_center",
+      phone: "033-460-2244",
+      address_ko: "강원특별자치도 인제군 인제읍 인제로 172번길 23",
+      lat: 38.0695,
+      lng: 128.1707,
+    },
+    {
+      name_ko: "인제군의료원",
+      name_en: "Inje County Medical Center",
+      name_zh: "麟蹄郡医疗院",
+      category: "hospital",
+      phone: "033-461-6161",
+      address_ko: "강원특별자치도 인제군 인제읍 인제로 233",
+      lat: 38.0701,
+      lng: 128.1698,
+    },
+    {
+      name_ko: "인제소방서 119안전센터",
+      name_en: null,
+      name_zh: "麟蹄消防署119安全中心",
+      category: "emergency_room",
+      phone: "119",
+      address_ko: "강원특별자치도 인제군 인제읍 비봉로 6",
+      lat: 38.068,
+      lng: 128.1652,
+    },
+    {
+      name_ko: "북면보건지소",
+      name_en: "Bukmyeon Health Subcenter",
+      name_zh: "北面保健支所",
+      category: "health_subcenter",
+      phone: null,
+      address_ko: "강원특별자치도 인제군 북면 한계리 63-1",
+      lat: 38.128,
+      lng: 128.386,
+    },
+    {
+      name_ko: "기린면보건지소",
+      name_en: "Girin-myeon Health Subcenter",
+      name_zh: "麒麟面保健支所",
+      category: "health_subcenter",
+      phone: "033-461-7392",
+      address_ko: "강원특별자치도 인제군 기린면 현리로 62",
+      lat: 37.941,
+      lng: 128.291,
+    },
+  ],
+  hongcheon: [
+    {
+      name_ko: "홍천군보건소",
+      name_en: "Hongcheon County Health Center",
+      name_zh: "洪川郡保健所",
+      category: "health_center",
+      phone: "033-430-4000",
+      address_ko: "강원특별자치도 홍천군 홍천읍 신장대로 45",
+      lat: 37.6971,
+      lng: 127.8887,
+    },
+    {
+      name_ko: "홍천아산병원",
+      name_en: "Hongcheon Asan Hospital",
+      name_zh: "洪川峨山医院",
+      category: "hospital",
+      phone: "033-430-8000",
+      address_ko: "강원특별자치도 홍천군 홍천읍 신장대로 8",
+      lat: 37.6942,
+      lng: 127.8851,
+    },
+    {
+      name_ko: "홍천소방서 119안전센터",
+      name_en: null,
+      name_zh: "洪川消防署119安全中心",
+      category: "emergency_room",
+      phone: "119",
+      address_ko: "강원특별자치도 홍천군 홍천읍 산림공원길 3",
+      lat: 37.699,
+      lng: 127.881,
+    },
+    {
+      name_ko: "내면보건지소",
+      name_en: "Naemyeon Health Subcenter",
+      name_zh: "内面保健支所",
+      category: "health_subcenter",
+      phone: null,
+      address_ko: "강원특별자치도 홍천군 내면 창촌리 386",
+      lat: 37.7169,
+      lng: 128.4823,
+    },
+    {
+      name_ko: "서면보건지소",
+      name_en: "Seomyeon Health Subcenter",
+      name_zh: "西面保健支所",
+      category: "health_subcenter",
+      phone: "033-430-4270",
+      address_ko: "강원특별자치도 홍천군 서면 마곡리 415",
+      lat: 37.646,
+      lng: 127.749,
+    },
+  ],
+  pyeongchang: [
+    {
+      name_ko: "평창군보건의료원",
+      name_en: "Pyeongchang County Health & Medical Center",
+      name_zh: "平昌郡保健医疗院",
+      category: "hospital",
+      phone: "033-330-4670",
+      address_ko: "강원특별자치도 평창군 평창읍 은개막골길 44",
+      lat: 37.3706,
+      lng: 128.3927,
+    },
+    {
+      name_ko: "평창군보건소",
+      name_en: "Pyeongchang County Health Center",
+      name_zh: "平昌郡保健所",
+      category: "health_center",
+      phone: "033-330-4674",
+      address_ko: "강원특별자치도 평창군 평창읍 은개막골길 44",
+      lat: 37.3702,
+      lng: 128.3923,
+    },
+    {
+      name_ko: "평창소방서 119안전센터",
+      name_en: null,
+      name_zh: "平昌消防署119安全中心",
+      category: "emergency_room",
+      phone: "119",
+      address_ko: "강원특별자치도 평창군 평창읍 노성산성길 9",
+      lat: 37.372,
+      lng: 128.395,
+    },
+    {
+      name_ko: "진부보건지소",
+      name_en: "Jinbu Health Subcenter",
+      name_zh: "珍富保健支所",
+      category: "health_subcenter",
+      phone: "033-330-4820",
+      address_ko: "강원특별자치도 평창군 진부면 진부시장길 7",
+      lat: 37.7325,
+      lng: 128.5906,
+    },
+    {
+      name_ko: "대관령보건지소",
+      name_en: "Daegwallyeong Health Subcenter",
+      name_zh: "大关岭保健支所",
+      category: "health_subcenter",
+      phone: null,
+      address_ko: "강원특별자치도 평창군 대관령면 대관령마루길 106",
+      lat: 37.6801,
+      lng: 128.7189,
+    },
+  ],
+};
+
+type OpenRegion = "injae" | "hongcheon" | "pyeongchang";
+
+export function careForRegion(region: RegionCode): CareFacility[] {
+  return MOCK_CARE[(region as OpenRegion)] ?? MOCK_CARE.pyeongchang;
+}

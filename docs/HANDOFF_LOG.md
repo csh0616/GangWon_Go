@@ -1357,3 +1357,127 @@ API로 충분하고, 웹 푸시는 PRD 2.3절에서 이미 스코프 밖입니�
   - **백엔드**: 기존 우선순위에 `travel_from_prev_day` 추가 — 카카오모빌리티 연동 작업과 같은
     묶음이라 `travel_from_prev`와 함께 구현하세요.
   - **디자인**: P0/P1/P2 반영 프롬프트 전달 예정.
+
+---
+
+## [2026-09-13 16:20] 프론트팀 — 1차 착수: 31장 전체 화면 + 데이터 레이어 + 목업
+
+### 1. 카카오맵 SDK 언어 옵션 — 실측 확인 완료 (착수 초반 확인 요청 항목)
+
+**타일 언어 옵션 없음.** 공식 문서(`developers.kakao.com/docs/en/kakaomap/common`,
+`apis.map.kakao.com/web/documentation`) 어디에도 SDK 로드 시 언어를 지정하는 파라미터나
+옵션이 없습니다. PRD 6장이 이미 예상한 최악의 경우(배경 타일은 한국어로 남음)를 그대로
+수용합니다. 스탑 마커는 커스텀 오버레이(`CustomOverlay`)라 마커 라벨은 선택 언어로 그리도록
+[MapView.tsx](../components/result/MapView.tsx) 에 구현해뒀습니다 — 실제 카카오맵 앱키가
+없어 라이브 렌더링은 아직 못 봤고, 지도 SDK 자체는 교체하지 않았습니다(PRD 3장 그대로).
+
+### 2. 이번 세션에서 만든 것
+
+`/app`, `/components`만 건드렸고 담당 디렉토리 밖(`/server`, `/agent`, `/scripts`, `/tests`,
+`docs/GANGWON_GO_PRD.md`, `docs/API_CONTRACT.md`, `design/artboards/`)은 손대지 않았습니다.
+
+- **셋업**: Next.js 16(App Router, Turbopack) + Tailwind v4 + next-intl(en/zh) + TypeScript.
+  루트에 `next.config.ts`/`middleware.ts`/`i18n/`/`package.json` 등 프레임워크가 요구하는
+  설정 파일이 새로 생겼습니다(다른 팀 디렉토리 아님, 앱 전체 빌드에 필요).
+- **데이터 레이어**: [app/lib/api.ts](../app/lib/api.ts) 한 곳에 전부 모았습니다.
+  `NEXT_PUBLIC_API_BASE_URL`이 비어있으면(지금 상태) `app/lib/mock/*`를 반환하고, 값이
+  채워지면 자동으로 실제 `fetch`를 탑니다 — 호출부(컴포넌트)는 안 바뀝니다. `.env.example`에
+  키 이름만 추가했습니다(`NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_KAKAO_MAP_KEY`).
+- **목업 데이터**: `app/lib/mock/`에 요청하신 케이스를 전부 만들었고, 실제 폼 입력(날짜·지역)에
+  반응해서 재현되도록 엔진화했습니다(고정 JSON 나열이 아님) — `generate.ts`가 PRD 3.5절
+  2.5단계(위도 내림차순 날짜 배정) 규칙을 그대로 흉내냅니다.
+  - 평창 단독 3일(스탑 8곳) · 홍천+평창 다중 시군(시군 이동 줄 포함) · "어디든지"(region_reason
+    포함) · 4일차 마지막 날 `stops: []` · `name.en`/`blurb.en`이 null인 스탑(평창
+    "대관령한우타운", 홍천 딸기마을 체험장) · 인제 단독 요청 시 blurb·travel_from_prev 전부
+    null(LLM/모빌리티 실패 시뮬레이션) · `free_text`에 `[[NO_CANDIDATE]]`/`[[INTERNAL_ERROR]]`를
+    넣으면 해당 에러 강제 재현 · `region_codes:[]`+빈 텍스트 및 시군 수>일수는 400
+    `INVALID_STRUCTURED_INPUT`
+  - `GET /api/itineraries` 목록: 진행 중 2건(오늘 포함 1건 + 미래 1건) + 지난 여행 1건
+  - `GET /api/care`: 시군별 5건, `name_en` null 섞음(인제/홍천/평창 소방서), `phone` null 섞음
+  - 알림 payload: 평창 코스 DAY1 첫 스탑(월정사, 야외) → 알펜시아 스카이워크(실내) 제안
+- **인증/저장 목업**: `app/lib/mock/auth.ts`가 Google 로그인을 흉내냅니다 —
+  **세션당 첫 로그인 시도는 항상 실패**하도록 만들어서 LoginRetry 화면을 매번 결정론적으로
+  볼 수 있게 했습니다. 저장된 코스는 `app/lib/mock/sessionSavedStore.ts`가 `sessionStorage`에
+  실어서 새로고침·뒤로가기에도 살아남습니다(진짜 DB가 없는 동안의 임시 방편).
+
+### 3. 화면 — 아트보드 31장, 상태 변형으로 흡수
+
+아트보드 1장 = 화면 1개가 아니라, 실제 라우트는 5개뿐이고 나머지는 **같은 컴포넌트의 상태
+변형**으로 만들었습니다(요청·입력에 따라 자연스럽게 재현됨, 화면별 진입 방법은 아래 4번 참고).
+
+| 라우트 | 흡수한 아트보드 |
+|---|---|
+| `/` | Main, MainRequired, MainNoText, MainTooMany |
+| `/result` (게스트, sessionStorage) | Loading, ResultMobile, ResultDesktop, ResultExpanded, ResultNoPref, ResultEN/ZH, EmptyDay, GenerateError, MapFallback |
+| `/itinerary/:id` (저장됨) | SavedDone, AlertModal, AlertExpiring, AlertApplied, ReplaceStop, ReplaceStopTwo |
+| `/mypage` | MyPage, MyPageDelete |
+| `/care` | Care, CareEN, CareNoLocation, CarePermission |
+
+SaveLogin/Login/LoginRetry/NotifyPermission은 `/result`·`/itinerary/:id` 위에 뜨는 모달
+시퀀스(`components/save/SaveFlowModal.tsx`)로 만들어서, 저장 버튼 클릭 한 번으로 로그인
+실패→재시도→성공→`/itinerary/:id` 리다이렉트→저장완료 토스트→알림 권한 모달까지 이어집니다.
+AlertBanner는 전역 컴포넌트(`components/managing/AlertListener.tsx`, 루트 레이아웃에 상시
+마운트)로, 코스 화면 밖에 있을 때만 뜨고 코스 화면 위에서는 AlertModal이 바로 뜹니다.
+
+### 4. 아트보드에 화면이 없던 필수 상태 — 처리 방식
+
+- **게스트 새로고침 보존**: `sessionStorage` (`app/lib/storage.ts`)
+- **저장 코스 주소**: `/itinerary/:id` (동적 라우트, `app/[locale]/itinerary/[id]/page.tsx`)
+- **Realtime 구독 시점**: 저장 성공 응답 직후 `useWatch().setWatchedId(id)` 호출 (로그인 시점 아님)
+- **대체 후보 1~2개**: `mockRegenerateCandidates`가 자연 필터링으로 재현(고정 개수 아님).
+  실제로 시군 POI 풀을 다 써버린 코스는 0개까지도 나옵니다 — `ReplaceStopModal`이 "지금
+  대체할 곳을 찾지 못했어요" 문구로 처리
+- **취향 칩 규칙**: `app/lib/weights.ts`의 `topPreferenceChips()` (0.5 이상·최대 3개·내림차순),
+  해당 없으면 `PrefChips`가 `null` 반환
+- **blurb/travel_from_prev null**: 각 컴포넌트가 값 없으면 그 줄 자체를 안 그림 (지어내지 않음)
+- **알림 권한 요청 시점**: 저장 직후에만 (`NotifyPermissionModal`, 앱 진입 시 안 물어봄)
+- **AlertBanner vs 브라우저 알림**: 배너가 기본, 브라우저 `Notification`은 `document.hidden`일
+  때만 보조 (`AlertListener.tsx`)
+
+### 5. 아트보드에 없어서 직접 판단한 것 2가지 (프론트 세션 프롬프트 지정 항목)
+
+1. **Loading 문구 분기**: 단일 시군은 "{시군}에서 갈 만한 곳을 고르고 있어요", 다중 시군은
+   시군명을 나열, "어디든지"는 "맞는 지역을 찾고 있어요"로 분기(`LoadingScreen.tsx`). 요약
+   카드의 지역 줄도 "어디든지"일 땐 "확인 중"으로 비웠습니다.
+2. **ALERT_EXPIRED 토스트**: `AlertModal`이 3분 카운트다운을 로컬에서도 세고, 0이 되면
+   스스로 닫히면서(`onExpired`) "시간이 지난 제안입니다" 토스트를 띄웁니다(다국어 키
+   `managing.expiredToast`).
+
+### 6. 아트보드와 약간 다르게 구현한 것 (판단 근거)
+
+- **"바꾸기" 버튼**: ResultDesktop 아트보드는 저장 전(`저장 안 됨`) 상태에서도 스탑마다
+  "바꾸기"가 보이는데, `regenerate-stop`은 계약상 저장된 일정에서만 동작합니다(API_CONTRACT.md
+  §3). 그래서 버튼은 항상 보이게 두되 게스트 상태에서 누르면 저장 흐름으로 먼저 유도하는 대신
+  — **지금은 `editable`을 저장된 코스에서만 true로 켜서 게스트 결과 화면에는 버튼 자체가
+  없습니다.** 모바일에서는 데스크톱처럼 별도 버튼 대신 스탑 행 전체를 탭하면 같은 편집
+  시트가 열립니다(공간 제약, 데스크톱은 아트보드 그대로 pill 버튼).
+- **"오늘" 배지·감시 상태**: `end_date < 오늘`이면 "지난 여행", `start_date <= 오늘 <= end_date`면
+  "지켜보는 중", 그 외(미래)는 "저장됨"만 표시(PRD 3.6절 감시 대상 조건과 동일 기준). 이때 "오늘"은
+  **뷰어의 브라우저 타임존이 아니라 KST로 고정**했습니다(`app/lib/date.ts`의 `todayYmd()` —
+  `Intl.DateTimeFormat`으로 `Asia/Seoul` 강제) — 프론트 세션 중 로컬시간 기준으로 짰다가 마이페이지의
+  "지켜보는 중" 배지가 지난 여행에도 붙는 버그를 직접 겪고 고쳤습니다. PRD 6장의 KST 원칙이
+  서버뿐 아니라 "오늘" 판정이 들어가는 프론트 로직에도 그대로 적용되어야 한다는 근거입니다.
+
+### 7. 확인해주세요 (블로커는 아님)
+
+- **카카오맵 실제 렌더링 미검증**: 앱키가 없어 `MapView.tsx`는 목업 환경에서 항상 MapFallback
+  경로만 탑니다. 실키가 생기면 `.env.local`에 `NEXT_PUBLIC_KAKAO_MAP_KEY`만 넣으면 바로
+  실제 지도 경로를 타는데, 그 상태의 라이브 확인은 아직 못 했습니다.
+- **`middleware.ts` deprecation 경고**: Next.js 16이 "proxy 컨벤션으로 옮기라"는 경고를
+  띄웁니다(빌드는 정상). 제공된 자동 코드모드(`@next/codemod middleware-to-proxy`)가 이
+  구조에서는 파일을 못 찾아 변경을 안 만들었습니다 — 동작에 지장 없어 이번엔 보류합니다.
+- **디자인 폴백**: 지금 파비콘은 Next.js 기본 아이콘입니다. 브랜드 파비콘이 나오면
+  `app/favicon.ico`만 교체하면 됩니다.
+
+### 8. 다음 액션
+
+- **백엔드**: `app/lib/api.ts`의 각 함수 시그니처가 `API_CONTRACT.md`를 그대로 따르므로,
+  엔드포인트가 준비되는 대로 `NEXT_PUBLIC_API_BASE_URL`만 채우면 목업→실제 전환이 됩니다.
+  함수별로 실제 엔드포인트 경로·헤더까지 이미 넣어뒀습니다(주석 없이 바로 fetch 분기).
+- **프론트(다음 세션)**: 실제 카카오맵 앱키로 라이브 렌더링 확인, `middleware→proxy` 전환
+  재검토, 파비콘/OG 이미지 교체, 실백엔드 연동 후 회귀 테스트.
+- **QA**: 이번 세션에서 만든 목업 트리거(`[[NO_CANDIDATE]]`/`[[INTERNAL_ERROR]]` free_text
+  마커, `window.__ggoTriggerAlert()` 개발 전용 훅)를 참고해 프론트 단독으로도 에러·알림
+  화면을 재현할 수 있습니다. 실백엔드 붙기 전까지 프론트 화면 자체의 수용기준 점검에
+  활용해주세요.
+- 블로커: 없음.

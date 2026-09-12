@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/*
+ * 팔레트 출처: design/README.md (아트보드 공통, 2026-09-10 검수 통과본)
+ * 값은 그대로 가져오고, 다크모드는 별도 지정 없음(모바일/데스크톱 2단 반응형만 PRD 3장 범위).
+ */
+:root {
+  --color-ink: #191f28; /* 본문 텍스트 */
+  --color-ink-soft: #4e5968; /* 보조 텍스트 */
+  --color-muted: #8b95a1; /* 흐린 텍스트 */
+  --color-faint: #b0b8c1; /* 가장 흐린 텍스트 */
+  --color-disabled: #c4cbd3; /* 비활성 텍스트 (지역칩 off 등) */
+  --color-line: #e5e8eb; /* 도트/구분선 */
+  --color-bg: #ffffff;
+  --color-bg-subtle: #f2f4f6; /* 배경(연) */
+  --color-bg-subtler: #f7f8fa;
+  --color-bg-faint: #fafbfc; /* 비활성 칩 배경 */
+  --color-brand: #0b7a55; /* 강조(브랜드) */
+  --color-brand-hover: #0a6247;
+  --color-brand-bg: #eaf5f0; /* 강조 배경 */
+  --color-danger: #e0492c;
+  --color-danger-bg: #fdecea;
+}
+
+@theme inline {
+  --font-sans: var(--font-plus-jakarta), var(--font-noto-sans-kr), "Apple SD Gothic Neo",
+    system-ui, sans-serif;
+
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-muted: var(--color-muted);
+  --color-faint: var(--color-faint);
+  --color-disabled: var(--color-disabled);
+  --color-line: var(--color-line);
+  --color-bg: var(--color-bg);
+  --color-bg-subtle: var(--color-bg-subtle);
+  --color-bg-subtler: var(--color-bg-subtler);
+  --color-bg-faint: var(--color-bg-faint);
+  --color-brand: var(--color-brand);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-brand-bg: var(--color-brand-bg);
+  --color-danger: var(--color-danger);
+  --color-danger-bg: var(--color-danger-bg);
+
+  --breakpoint-md: 768px;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+}
