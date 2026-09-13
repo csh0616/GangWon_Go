@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { Clock3, MapPin, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -13,6 +13,7 @@ import { MapView } from "./MapView";
 import { localizedText, type UiLocale } from "@/app/lib/localized";
 import { formatDateRange, formatMonthDayWeekday, diffDaysInclusive, todayYmd } from "@/app/lib/date";
 import { buildResultTitle } from "@/app/lib/resultTitle";
+import { useDayScrollSpy } from "@/app/lib/useDayScrollSpy";
 import type {
   ItineraryJson,
   PreferenceWeights,
@@ -64,60 +65,113 @@ export function ResultView({
   const { days, narration, region_reason } = itineraryJson;
   const dayCount = days.length;
   const activeDay = days[selectedDayIndex] ?? days[0];
+
+  // 화살표를 빠르게 연타하면 React 상태 업데이트가 배치되어 클릭 핸들러들이 모두
+  // 같은 렌더의(오래된) selectedDayIndex를 참조하게 된다 — ref에 최신값을 동기로
+  // 유지해두고 화살표는 항상 이 ref를 기준으로 다음/이전을 계산한다.
+  const selectedDayIndexRef = useRef(0);
+  function updateSelectedDayIndex(index: number) {
+    selectedDayIndexRef.current = index;
+    setSelectedDayIndex(index);
+  }
+
+  // 데스크톱 좌측 패널과 모바일 시트는 각각 독립된 스크롤 컨테이너다 — 두 트리 모두
+  // 항상 DOM에 존재하므로(반응형은 CSS로만 숨김) refs와 옵저버도 따로 둔다.
+  const desktopScrollRef = useRef<HTMLDivElement>(null);
+  const desktopDayRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const mobileDayRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const { scrollToDay: scrollToDayDesktop } = useDayScrollSpy({
+    containerRef: desktopScrollRef,
+    dayRefs: desktopDayRefs,
+    dayCount,
+    enabled: dayCount > 1,
+    onDayChange: updateSelectedDayIndex,
+  });
+  const { scrollToDay: scrollToDayMobile } = useDayScrollSpy({
+    containerRef: mobileScrollRef,
+    dayRefs: mobileDayRefs,
+    dayCount,
+    enabled: dayCount > 1,
+    onDayChange: updateSelectedDayIndex,
+  });
+
+  function goToDay(index: number) {
+    const clamped = Math.max(0, Math.min(dayCount - 1, index));
+    updateSelectedDayIndex(clamped);
+    // 둘 다 부르되, 화면에 없는(스크롤 불가한) 쪽은 사실상 아무 일도 하지 않는다
+    scrollToDayDesktop(clamped);
+    scrollToDayMobile(clamped);
+  }
   const stopCount = days.reduce((sum, d) => sum + d.stops.length, 0);
   const title = buildResultTitle(selectedRegions.region_codes, dayCount, tr, t("titleSuffix"));
   const narrationText = localizedText(narration, locale);
   const regionReasonText = localizedText(region_reason, locale);
   const today = todayYmd();
 
-  const daysContent = (
-    <>
-      {days.map((day, dayIndex) => (
-        <div key={day.day}>
-          <button
-            type="button"
-            onClick={() => setSelectedDayIndex(dayIndex)}
-            className="flex w-full items-baseline gap-2.5 pb-1.5 pt-[18px] text-left first:pt-0"
-          >
-            <span
+  function renderDays(dayRefs: React.RefObject<(HTMLDivElement | null)[]>) {
+    return (
+      <>
+        {days.map((day, dayIndex) => {
+          const selected = dayIndex === selectedDayIndex;
+          return (
+            <div
+              key={day.day}
+              ref={(el) => {
+                dayRefs.current[dayIndex] = el;
+              }}
               className={
-                "text-[17px] font-bold tracking-tight md:text-[18px] " +
-                (dayIndex === selectedDayIndex ? "text-brand" : "")
+                "-ml-3 border-l-[3px] pl-3 transition-colors duration-300 " +
+                (selected ? "border-brand bg-brand-bg/40" : "border-transparent bg-transparent")
               }
             >
-              {t("day", { n: day.day })}
-            </span>
-            {status !== "unsaved" && day.date === today && (
-              <span className="rounded-full bg-brand-bg px-2 py-0.5 text-[11px] font-bold text-brand">
-                {t("today")}
-              </span>
-            )}
-            <span className="text-[12.5px] font-medium text-muted md:text-[13px]">
-              {tr(day.region_code)} · {formatMonthDayWeekday(day.date, locale)} · {t("dayStopCount", { count: day.stops.length })}
-            </span>
-          </button>
+              <button
+                type="button"
+                onClick={() => goToDay(dayIndex)}
+                className="flex w-full items-baseline gap-2.5 pb-1.5 pt-[18px] text-left first:pt-0"
+              >
+                <span
+                  className={
+                    "text-[17px] font-bold tracking-tight md:text-[18px] " +
+                    (selected ? "text-brand" : "")
+                  }
+                >
+                  {t("day", { n: day.day })}
+                </span>
+                {status !== "unsaved" && day.date === today && (
+                  <span className="rounded-full bg-brand-bg px-2 py-0.5 text-[11px] font-bold text-brand">
+                    {t("today")}
+                  </span>
+                )}
+                <span className="text-[12.5px] font-medium text-muted md:text-[13px]">
+                  {tr(day.region_code)} · {formatMonthDayWeekday(day.date, locale)} · {t("dayStopCount", { count: day.stops.length })}
+                </span>
+              </button>
 
-          <RegionTravelBanner travel={day.travel_from_prev_day} />
+              <RegionTravelBanner travel={day.travel_from_prev_day} />
 
-          {day.stops.length === 0 ? (
-            <EmptyDayNotice region={day.region_code} date={day.date} />
-          ) : (
-            day.stops.map((stop, i) => (
-              <div key={stop.poi_id}>
-                {i > 0 && <TravelLeg travel={stop.travel_from_prev} />}
-                <StopRow
-                  stop={stop}
-                  changed={changedStopId === stop.poi_id}
-                  editable={editable}
-                  onSwap={() => onSwapStop?.(day.day, stop.poi_id, day.region_code)}
-                />
-              </div>
-            ))
-          )}
-        </div>
-      ))}
-    </>
-  );
+              {day.stops.length === 0 ? (
+                <EmptyDayNotice region={day.region_code} date={day.date} />
+              ) : (
+                day.stops.map((stop, i) => (
+                  <div key={stop.poi_id}>
+                    {i > 0 && <TravelLeg travel={stop.travel_from_prev} />}
+                    <StopRow
+                      stop={stop}
+                      changed={changedStopId === stop.poi_id}
+                      editable={editable}
+                      onSwap={() => onSwapStop?.(day.day, stop.poi_id, day.region_code)}
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
 
   const metaChips = (
     <div className="flex flex-wrap gap-1.5 md:gap-2">
@@ -179,7 +233,7 @@ export function ResultView({
             type="button"
             aria-label="previous day"
             disabled={selectedDayIndex === 0}
-            onClick={() => setSelectedDayIndex((i) => Math.max(0, i - 1))}
+            onClick={() => goToDay(selectedDayIndexRef.current - 1)}
             className="flex size-7 items-center justify-center rounded-full text-ink-soft disabled:opacity-30"
           >
             <ChevronLeft size={15} />
@@ -194,7 +248,7 @@ export function ResultView({
             type="button"
             aria-label="next day"
             disabled={selectedDayIndex === dayCount - 1}
-            onClick={() => setSelectedDayIndex((i) => Math.min(dayCount - 1, i + 1))}
+            onClick={() => goToDay(selectedDayIndexRef.current + 1)}
             className="flex size-7 items-center justify-center rounded-full text-ink-soft disabled:opacity-30"
           >
             <ChevronRight size={15} />
@@ -213,7 +267,9 @@ export function ResultView({
       <div className="hidden h-full w-[480px] flex-col overflow-hidden border-r border-bg-subtle bg-bg md:flex">
         <div className="overflow-y-auto px-8 pb-0 pt-[30px]">{header}</div>
         <div className="h-2 shrink-0 bg-bg-subtler" />
-        <div className="flex-grow overflow-y-auto px-8 pt-[22px]">{daysContent}</div>
+        <div ref={desktopScrollRef} className="flex-grow overflow-y-auto px-8 pt-[22px]">
+          {renderDays(desktopDayRefs)}
+        </div>
         {footer}
       </div>
 
@@ -238,7 +294,9 @@ export function ResultView({
         </button>
         <div className="overflow-y-auto px-5 pb-2">{header}</div>
         <div className="h-2 shrink-0 bg-bg-subtler" />
-        <div className="flex-grow overflow-y-auto px-5 pt-4">{daysContent}</div>
+        <div ref={mobileScrollRef} className="flex-grow overflow-y-auto px-5 pt-4">
+          {renderDays(mobileDayRefs)}
+        </div>
         {footer}
         {!expanded && (
           <button

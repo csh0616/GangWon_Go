@@ -1,13 +1,24 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { UserRound } from "lucide-react";
 import { Link } from "@/i18n/navigation";
+import { getSession, subscribeAuthChange } from "@/app/lib/mock/auth";
 import { LangSwitcher } from "./LangSwitcher";
 
 export function Header({ showCareLink = true }: { showCareLink?: boolean }) {
   const t = useTranslations("common");
   const tmy = useTranslations("mypage");
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  const refresh = useCallback(() => setLoggedIn(Boolean(getSession())), []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refresh();
+    return subscribeAuthChange(refresh);
+  }, [refresh]);
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between px-5 md:h-16 md:px-8">
@@ -25,9 +36,16 @@ export function Header({ showCareLink = true }: { showCareLink?: boolean }) {
           <Link
             href="/mypage"
             aria-label={tmy("title")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-bg-subtle md:size-[34px]"
+            className={
+              "flex size-8 shrink-0 items-center justify-center rounded-full transition-colors md:size-[34px] " +
+              (loggedIn ? "bg-brand-bg" : "bg-bg-subtle")
+            }
           >
-            <UserRound size={16} strokeWidth={1.6} className="text-ink-soft" />
+            <UserRound
+              size={16}
+              strokeWidth={1.6}
+              className={loggedIn ? "text-brand" : "text-ink-soft"}
+            />
           </Link>
         </div>
       </div>
