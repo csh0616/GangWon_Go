@@ -54,10 +54,21 @@ export function useDayScrollSpy({
     // 같아 "바닥"으로 잘못 판정된다 — 실사용에서 코스를 만들자마자 맨 마지막 DAY로
     // 가 있고 스크롤을 해도 전혀 안 바뀌던 버그의 원인. 실제로 스크롤할 여유가 있을
     // 때만 바닥 판정을 적용한다.
+    //
+    // 사파리는 컨테이너 바닥에서 더 스크롤하면 러버밴드(elastic overscroll)로
+    // 튕기는데, 이 되튐 구간에서 scrollTop이 실제 위치보다 늦게/불안정하게
+    // 보고되는 경우가 있어 "바닥"이 계속 참으로 남아 사용자가 위로 스크롤을
+    // 시작해도 마지막 DAY에 계속 붙들려 있는 것처럼 보일 수 있다 — 스크롤 방향이
+    // 위쪽이면 바닥 보정을 아예 걸지 않도록 방향을 같이 본다.
+    let lastScrollTop = root.scrollTop;
     function isAtBottom() {
       if (!root) return false;
+      const current = root.scrollTop;
+      const scrollingUp = current < lastScrollTop - 0.5;
+      lastScrollTop = current;
+      if (scrollingUp) return false;
       const hasScrollRoom = root.scrollHeight - root.clientHeight > 4;
-      return hasScrollRoom && root.scrollTop + root.clientHeight >= root.scrollHeight - 2;
+      return hasScrollRoom && current + root.clientHeight >= root.scrollHeight - 2;
     }
 
     const observer = new IntersectionObserver(
