@@ -26,6 +26,17 @@ export function useDayScrollSpy({
   const suppressedRef = useRef(false);
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // onDayChange가 호출부에서 매 렌더 새로 만들어지는 함수라도(예: ResultView가
+  // hasMyLocation 등 다른 상태로 재렌더될 때) 옵저버가 매번 disconnect/재생성되지
+  // 않도록 ref로 최신 콜백만 갈아끼운다 — 실제로 이걸 안 했더니 지도의 "내 위치"
+  // watchPosition이 재렌더를 유발할 때마다 옵저버가 끊겼다 다시 붙으며 스크롤 도중의
+  // 교차 알림을 놓쳐, 스크롤로는 지도가 안 바뀌고 클릭(옵저버를 안 거침)만 되는
+  // 증상으로 나타났다.
+  const onDayChangeRef = useRef(onDayChange);
+  useEffect(() => {
+    onDayChangeRef.current = onDayChange;
+  });
+
   useEffect(() => {
     if (!enabled) return;
     const root = containerRef.current;
@@ -36,17 +47,35 @@ export function useDayScrollSpy({
     // 대해 서로 다른 타이밍(스크롤 이벤트 vs 옵저버 콜백 큐)으로 각각 비동기 호출되므로,
     // 어느 쪽이 나중에 실행되든 항상 같은 결론에 수렴하도록 옵저버 콜백에도 바닥 체크를
     // 동일하게 넣는다 — 안 그러면 옵저버가 보정 결과를 다시 덮어써버릴 수 있다.
+    //
+    // 스크롤할 거리가 아예 없을 때(짧은 코스라 리스트가 컨테이너 안에 다 들어가는
+    // 경우, 혹은 마운트 직후 아직 레이아웃 전이라 scrollHeight/clientHeight가 둘 다
+    // 0인 순간)는 scrollTop(0) + clientHeight가 scrollHeight - 2보다 항상 크거나
+    // 같아 "바닥"으로 잘못 판정된다 — 실사용에서 코스를 만들자마자 맨 마지막 DAY로
+    // 가 있고 스크롤을 해도 전혀 안 바뀌던 버그의 원인. 실제로 스크롤할 여유가 있을
+    // 때만 바닥 판정을 적용한다.
+    //
+    // 사파리는 컨테이너 바닥에서 더 스크롤하면 러버밴드(elastic overscroll)로
+    // 튕기는데, 이 되튐 구간에서 scrollTop이 실제 위치보다 늦게/불안정하게
+    // 보고되는 경우가 있어 "바닥"이 계속 참으로 남아 사용자가 위로 스크롤을
+    // 시작해도 마지막 DAY에 계속 붙들려 있는 것처럼 보일 수 있다 — 스크롤 방향이
+    // 위쪽이면 바닥 보정을 아예 걸지 않도록 방향을 같이 본다.
+    let lastScrollTop = root.scrollTop;
     function isAtBottom() {
-      return root
-        ? root.scrollTop + root.clientHeight >= root.scrollHeight - 2
-        : false;
+      if (!root) return false;
+      const current = root.scrollTop;
+      const scrollingUp = current < lastScrollTop - 0.5;
+      lastScrollTop = current;
+      if (scrollingUp) return false;
+      const hasScrollRoom = root.scrollHeight - root.clientHeight > 4;
+      return hasScrollRoom && current + root.clientHeight >= root.scrollHeight - 2;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (suppressedRef.current) return;
         if (isAtBottom()) {
-          onDayChange(dayCount - 1);
+          onDayChangeRef.current(dayCount - 1);
           return;
         }
         const visible = entries.filter((e) => e.isIntersecting);
@@ -56,7 +85,7 @@ export function useDayScrollSpy({
           a.boundingClientRect.top <= b.boundingClientRect.top ? a : b
         );
         const idx = dayRefs.current.findIndex((el) => el === topMost.target);
-        if (idx >= 0) onDayChange(idx);
+        if (idx >= 0) onDayChangeRef.current(idx);
       },
       { root, rootMargin: "0px 0px -66% 0px", threshold: 0 }
     );
@@ -66,7 +95,7 @@ export function useDayScrollSpy({
 
     function handleScroll() {
       if (suppressedRef.current) return;
-      if (isAtBottom()) onDayChange(dayCount - 1);
+      if (isAtBottom()) onDayChangeRef.current(dayCount - 1);
     }
     root.addEventListener("scroll", handleScroll, { passive: true });
 
@@ -74,7 +103,9 @@ export function useDayScrollSpy({
       observer.disconnect();
       root.removeEventListener("scroll", handleScroll);
     };
-  }, [containerRef, dayRefs, dayCount, enabled, onDayChange]);
+    // onDayChange는 위 ref로 최신값을 따로 반영하므로 여기서는 의도적으로 뺀다 —
+    // 넣으면 호출부가 매 렌더 새 함수를 넘길 때마다 옵저버가 불필요하게 재생성된다.
+  }, [containerRef, dayRefs, dayCount, enabled]);
 
   const scrollToDay = useCallback(
     (index: number) => {
