@@ -93,6 +93,7 @@
   "result": {
     "titleSuffix": "日行程",
     "stops": "{count}个地点",
+    "dayStopCount": "{count}个地点",
     "notSaved": "未保存",
     "saved": "已保存",
     "watching": "监测中",
@@ -132,8 +133,7 @@
     "later": "以后再说",
     "loginPromptTitle": "登录后即可\n保存此行程",
     "loginPromptBody": "保存后，如果旅行中下雨或路况拥堵，会优先为您提出更换建议。",
-    "loginPromptKeepPrefix": "刚刚生成的",
-    "loginPromptKeepSuffix": "即使不登录，也会保留在这个页面。",
+    "loginPromptKeep": "刚刚生成的 <b>{course}</b> 即使不登录，也会保留在这个页面。",
     "continueWithGoogle": "使用Google继续",
     "loginTitle": "快捷登录",
     "loginSubtitle": "使用Google账号即可直接开始，\n无需另外注册。",
@@ -167,8 +167,7 @@
     "expiredToast": "这条建议已经过期了",
     "bannerText": "您的行程收到了新的建议",
     "bannerAction": "查看详情",
-    "appliedBadgePrefix": "已更换为",
-    "appliedBadgeSuffix": "· 仅更新了1个地点"
+    "appliedToast": "已更换为{name} · 仅更新了1个地点"
   },
   "edit": {
     "title": "更换这个地点",

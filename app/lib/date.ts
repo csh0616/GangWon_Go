@@ -12,18 +12,21 @@ function parseYmd(ymd: string): { y: number; m: number; d: number; weekday: numb
 }
 
 const WEEKDAY_SHORT: Record<UiLocale, string[]> = {
+  ko: ["일", "월", "화", "수", "목", "금", "토"],
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   zh: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
 };
 
 const MONTH_SHORT: Record<UiLocale, string[]> = {
+  ko: ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
   en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
   zh: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
 };
 
-/** "9월 10일 목" 형태 */
+/** "9월 10일 목" 형태 (design/artboards/ResultMobile.dc.html 등 한국어 화면 표기 그대로) */
 export function formatMonthDayWeekday(ymd: string, locale: UiLocale): string {
   const { m, d, weekday } = parseYmd(ymd);
+  if (locale === "ko") return `${MONTH_SHORT.ko[m - 1]} ${d}일 ${WEEKDAY_SHORT.ko[weekday]}`;
   if (locale === "zh") return `${MONTH_SHORT.zh[m - 1]}${d}日 ${WEEKDAY_SHORT.zh[weekday]}`;
   return `${MONTH_SHORT.en[m - 1]} ${d} (${WEEKDAY_SHORT.en[weekday]})`;
 }
@@ -32,6 +35,10 @@ export function formatMonthDayWeekday(ymd: string, locale: UiLocale): string {
 export function formatDateRange(startYmd: string, endYmd: string, locale: UiLocale): string {
   const start = parseYmd(startYmd);
   const end = parseYmd(endYmd);
+  if (locale === "ko") {
+    if (start.m === end.m) return `${MONTH_SHORT.ko[start.m - 1]} ${start.d}일—${end.d}일`;
+    return `${MONTH_SHORT.ko[start.m - 1]} ${start.d}일—${MONTH_SHORT.ko[end.m - 1]} ${end.d}일`;
+  }
   if (locale === "zh") {
     if (start.m === end.m) return `${MONTH_SHORT.zh[start.m - 1]}${start.d}日—${end.d}日`;
     return `${MONTH_SHORT.zh[start.m - 1]}${start.d}日—${MONTH_SHORT.zh[end.m - 1]}${end.d}日`;

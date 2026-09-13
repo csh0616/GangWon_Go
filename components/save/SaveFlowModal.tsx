@@ -100,8 +100,10 @@ export function SaveFlowModal({
             </h2>
             <p className="mt-2.5 text-sm leading-relaxed text-muted">{t("loginPromptBody")}</p>
             <p className="mt-3 text-xs leading-relaxed text-faint">
-              {t("loginPromptKeepPrefix")} <span className="font-semibold text-ink-soft">{title}</span>{" "}
-              {t("loginPromptKeepSuffix")}
+              {t.rich("loginPromptKeep", {
+                course: title,
+                b: (chunks) => <span className="font-semibold text-ink-soft">{chunks}</span>,
+              })}
             </p>
             <div className="mt-6">
               <Button onClick={handleGoogleContinue} disabled={step === "authorizing" || saving}>

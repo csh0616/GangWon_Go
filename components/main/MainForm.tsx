@@ -27,6 +27,7 @@ export function MainForm() {
   const [endDate, setEndDate] = useState(() => addDays(todayYmd(), 3));
   const [companions, setCompanions] = useState(2);
   const [relationship, setRelationship] = useState<Relationship | null>(null);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   const freeTextEmpty = freeText.trim().length === 0;
   // 자유 텍스트를 지우면 "어디든지" 선택은 더 이상 유효하지 않다 (PRD 3.5절 2.4단계 각주)
@@ -59,7 +60,10 @@ export function MainForm() {
   }
 
   function handleSubmit() {
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      setSubmitAttempted(true);
+      return;
+    }
 
     const request: GenerateRequest = {
       start_date: startDate,
@@ -76,7 +80,7 @@ export function MainForm() {
 
   return (
     <div className="flex min-h-dvh flex-col">
-      {requiredMissingCount > 0 && (
+      {submitAttempted && requiredMissingCount > 0 && (
         <div className="flex items-center gap-2 bg-danger-bg px-5 py-3">
           <AlertCircle size={15} className="shrink-0 text-danger" strokeWidth={1.6} />
           <span className="text-[12.5px] font-semibold text-danger">
@@ -109,13 +113,13 @@ export function MainForm() {
         <Section
           label={t("regionLabel")}
           hint={
-            regionMissing
+            submitAttempted && regionMissing
               ? t("regionHintRequired")
-              : tooMany
+              : submitAttempted && tooMany
                 ? t("regionHintTooMany", { count: selectedRegions.length })
                 : t("regionHintDefault")
           }
-          hintTone={regionMissing || tooMany ? "danger" : "default"}
+          hintTone={submitAttempted && (regionMissing || tooMany) ? "danger" : "default"}
         >
           <RegionPicker
             autoMode={effectiveAutoMode}
@@ -143,7 +147,7 @@ export function MainForm() {
 
         <Section
           label={t("relationshipLabel")}
-          hint={relationshipMissing ? t("relationshipHintRequired") : undefined}
+          hint={submitAttempted && relationshipMissing ? t("relationshipHintRequired") : undefined}
           hintTone="danger"
         >
           <RelationshipPicker value={relationship} onChange={setRelationship} />
@@ -177,7 +181,7 @@ export function MainForm() {
             </>
           )}
         </div>
-        <Button onClick={handleSubmit} disabled={!canSubmit}>
+        <Button onClick={handleSubmit} visuallyEmpty={!canSubmit}>
           {t("submit")}
         </Button>
       </div>

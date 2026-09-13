@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { Clock3, MapPin, ChevronUp, ChevronDown } from "lucide-react";
+import { Clock3, MapPin, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { StopRow } from "./StopRow";
 import { TravelLeg } from "./TravelLeg";
@@ -58,9 +58,12 @@ export function ResultView({
   const trel = useTranslations("relationships");
   const locale = useLocale() as UiLocale;
   const [expanded, setExpanded] = useState(false);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const [hasMyLocation, setHasMyLocation] = useState(false);
 
   const { days, narration, region_reason } = itineraryJson;
   const dayCount = days.length;
+  const activeDay = days[selectedDayIndex] ?? days[0];
   const stopCount = days.reduce((sum, d) => sum + d.stops.length, 0);
   const title = buildResultTitle(selectedRegions.region_codes, dayCount, tr, t("titleSuffix"));
   const narrationText = localizedText(narration, locale);
@@ -69,10 +72,19 @@ export function ResultView({
 
   const daysContent = (
     <>
-      {days.map((day) => (
+      {days.map((day, dayIndex) => (
         <div key={day.day}>
-          <div className="flex items-baseline gap-2.5 pb-1.5 pt-[18px] first:pt-0">
-            <span className="text-[17px] font-bold tracking-tight md:text-[18px]">
+          <button
+            type="button"
+            onClick={() => setSelectedDayIndex(dayIndex)}
+            className="flex w-full items-baseline gap-2.5 pb-1.5 pt-[18px] text-left first:pt-0"
+          >
+            <span
+              className={
+                "text-[17px] font-bold tracking-tight md:text-[18px] " +
+                (dayIndex === selectedDayIndex ? "text-brand" : "")
+              }
+            >
               {t("day", { n: day.day })}
             </span>
             {status !== "unsaved" && day.date === today && (
@@ -81,9 +93,9 @@ export function ResultView({
               </span>
             )}
             <span className="text-[12.5px] font-medium text-muted md:text-[13px]">
-              {tr(day.region_code)} · {formatMonthDayWeekday(day.date, locale)} · {t("stops", { count: day.stops.length })}
+              {tr(day.region_code)} · {formatMonthDayWeekday(day.date, locale)} · {t("dayStopCount", { count: day.stops.length })}
             </span>
-          </div>
+          </button>
 
           <RegionTravelBanner travel={day.travel_from_prev_day} />
 
@@ -157,12 +169,45 @@ export function ResultView({
     <div className="relative h-[calc(100dvh-56px)] overflow-hidden md:h-[calc(100dvh-64px)]">
       {/* 지도 (모바일: 배경 전체 / 데스크톱: 우측 패널) */}
       <div className="absolute inset-0 md:left-[480px]">
-        <MapView day={days[0]} />
+        <MapView day={activeDay} onMyLocationChange={setHasMyLocation} />
       </div>
-      <div className="absolute left-6 top-6 hidden items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:left-[504px] md:flex">
-        <MapPin size={13} className="text-brand" />
-        <span className="text-[13px] font-medium text-muted">{tc("myLocation")}</span>
-      </div>
+
+      {/* DAY 전환 — 지도가 어느 날짜를 보여주는지 표시하고 좌우로 넘길 수 있다 */}
+      {dayCount > 1 && (
+        <div className="absolute left-6 top-6 flex items-center gap-1 rounded-2xl bg-bg py-1.5 pl-2 pr-1.5 shadow-lg md:left-[504px]">
+          <button
+            type="button"
+            aria-label="previous day"
+            disabled={selectedDayIndex === 0}
+            onClick={() => setSelectedDayIndex((i) => Math.max(0, i - 1))}
+            className="flex size-7 items-center justify-center rounded-full text-ink-soft disabled:opacity-30"
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <span className="flex items-center gap-2 whitespace-nowrap px-1 text-[13px] font-semibold tracking-tight">
+            {t("day", { n: activeDay.day })}
+            <span className="hidden text-[12.5px] font-medium text-muted md:inline">
+              {tr(activeDay.region_code)} · {formatMonthDayWeekday(activeDay.date, locale)}
+            </span>
+          </span>
+          <button
+            type="button"
+            aria-label="next day"
+            disabled={selectedDayIndex === dayCount - 1}
+            onClick={() => setSelectedDayIndex((i) => Math.min(dayCount - 1, i + 1))}
+            className="flex size-7 items-center justify-center rounded-full text-ink-soft disabled:opacity-30"
+          >
+            <ChevronRight size={15} />
+          </button>
+        </div>
+      )}
+
+      {hasMyLocation && (
+        <div className="absolute left-6 bottom-6 hidden items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:left-[504px] md:flex">
+          <MapPin size={13} className="text-brand" />
+          <span className="text-[13px] font-medium text-muted">{tc("myLocation")}</span>
+        </div>
+      )}
 
       {/* 데스크톱 좌측 패널 */}
       <div className="hidden h-full w-[480px] flex-col overflow-hidden border-r border-bg-subtle bg-bg md:flex">
