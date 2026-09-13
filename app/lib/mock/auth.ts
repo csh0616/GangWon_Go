@@ -8,6 +8,7 @@
 
 const AUTH_KEY = "ggo:auth";
 const ATTEMPT_KEY = "ggo:login_attempts";
+const AUTH_CHANGE_EVENT = "ggo:auth-changed";
 
 export type Session = { user_id: string; token: string };
 
@@ -28,11 +29,25 @@ export function getSession(): Session | null {
 function setSession(session: Session) {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(AUTH_KEY, JSON.stringify(session));
+  window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
 }
 
 export function logout() {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(AUTH_KEY);
+  window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+}
+
+/**
+ * 로그인/로그아웃이 다른 컴포넌트(GuestLoginHint, Header 등)에서 일어나도
+ * 전역 상태 관리 없이 즉시 반영되도록 하는 최소한의 구독 — mock 세션은
+ * sessionStorage 기반이라 storage 이벤트는 "다른 탭"에서만 발생해 같은 탭
+ * 안의 상태 동기화에는 쓸 수 없다.
+ */
+export function subscribeAuthChange(callback: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(AUTH_CHANGE_EVENT, callback);
+  return () => window.removeEventListener(AUTH_CHANGE_EVENT, callback);
 }
 
 export async function mockGoogleLogin(): Promise<{ ok: true; session: Session } | { ok: false }> {
