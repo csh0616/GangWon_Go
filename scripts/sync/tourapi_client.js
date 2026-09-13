@@ -24,15 +24,16 @@ const REGION_TO_SIGUNGU = {
   pyeongchang: { areaCode: 32, sigunguCode: 15 },
 };
 
-async function callTourApi(endpoint, params) {
-  if (!SERVICE_KEY) {
-    throw new Error('TOURAPI_SERVICE_KEY가 설정되지 않았습니다 (.env 확인). 공공데이터포털에서 발급받아야 합니다.');
-  }
+const PAGE_SIZE = 100;
+const MAX_PAGES = 20; // 안전 상한(100 × 20 = 2,000건) — 평창 하나가 409건이라 여유를 크게 둠
+
+async function callTourApiPage(endpoint, params, pageNo) {
   const query = new URLSearchParams({
     MobileOS: 'ETC',
     MobileApp: 'GangwonGo',
     _type: 'json',
-    numOfRows: '100',
+    numOfRows: String(PAGE_SIZE),
+    pageNo: String(pageNo),
     ...params,
   });
   // serviceKey는 이미 인코딩된 키라 URLSearchParams를 거치지 않고 그대로 붙인다 (위 헤더 참고)
@@ -42,9 +43,30 @@ async function callTourApi(endpoint, params) {
     throw new Error(`TourAPI 호출 실패: ${endpoint} HTTP ${res.status}`);
   }
   const json = await res.json();
-  const items = json?.response?.body?.items?.item;
-  if (!items) return [];
-  return Array.isArray(items) ? items : [items];
+  const body = json?.response?.body;
+  const items = body?.items?.item;
+  const list = items ? (Array.isArray(items) ? items : [items]) : [];
+  return { items: list, totalCount: Number(body?.totalCount || 0) };
+}
+
+/**
+ * 페이지네이션 전량 수집 (라운드5 점검 #1) — `numOfRows` 기본값 100에 페이지 반복이 없어서, 평창처럼
+ * 전체 409건인 지역은 첫 100건만 가져오고 있었다. TourAPI 기본 정렬(등록일 역순으로 보임)이 카테고리와
+ * 무관해서 잘린 나머지에 nature_hiking/culture_history가 몰려 있었고, 그 결과 평창 코스가 온통
+ * food_local로 채워졌다 — 실측으로 원인 확정(아래 사용처 주석).
+ */
+async function callTourApi(endpoint, params) {
+  if (!SERVICE_KEY) {
+    throw new Error('TOURAPI_SERVICE_KEY가 설정되지 않았습니다 (.env 확인). 공공데이터포털에서 발급받아야 합니다.');
+  }
+  const all = [];
+  for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const { items, totalCount } = await callTourApiPage(endpoint, params, pageNo);
+    all.push(...items);
+    if (items.length === 0 || all.length >= totalCount) break;
+  }
+  return all;
 }
 
 /**
