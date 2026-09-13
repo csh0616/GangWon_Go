@@ -26,6 +26,17 @@ export function useDayScrollSpy({
   const suppressedRef = useRef(false);
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // onDayChange가 호출부에서 매 렌더 새로 만들어지는 함수라도(예: ResultView가
+  // hasMyLocation 등 다른 상태로 재렌더될 때) 옵저버가 매번 disconnect/재생성되지
+  // 않도록 ref로 최신 콜백만 갈아끼운다 — 실제로 이걸 안 했더니 지도의 "내 위치"
+  // watchPosition이 재렌더를 유발할 때마다 옵저버가 끊겼다 다시 붙으며 스크롤 도중의
+  // 교차 알림을 놓쳐, 스크롤로는 지도가 안 바뀌고 클릭(옵저버를 안 거침)만 되는
+  // 증상으로 나타났다.
+  const onDayChangeRef = useRef(onDayChange);
+  useEffect(() => {
+    onDayChangeRef.current = onDayChange;
+  });
+
   useEffect(() => {
     if (!enabled) return;
     const root = containerRef.current;
@@ -46,7 +57,7 @@ export function useDayScrollSpy({
       (entries) => {
         if (suppressedRef.current) return;
         if (isAtBottom()) {
-          onDayChange(dayCount - 1);
+          onDayChangeRef.current(dayCount - 1);
           return;
         }
         const visible = entries.filter((e) => e.isIntersecting);
@@ -56,7 +67,7 @@ export function useDayScrollSpy({
           a.boundingClientRect.top <= b.boundingClientRect.top ? a : b
         );
         const idx = dayRefs.current.findIndex((el) => el === topMost.target);
-        if (idx >= 0) onDayChange(idx);
+        if (idx >= 0) onDayChangeRef.current(idx);
       },
       { root, rootMargin: "0px 0px -66% 0px", threshold: 0 }
     );
@@ -66,7 +77,7 @@ export function useDayScrollSpy({
 
     function handleScroll() {
       if (suppressedRef.current) return;
-      if (isAtBottom()) onDayChange(dayCount - 1);
+      if (isAtBottom()) onDayChangeRef.current(dayCount - 1);
     }
     root.addEventListener("scroll", handleScroll, { passive: true });
 
@@ -74,7 +85,9 @@ export function useDayScrollSpy({
       observer.disconnect();
       root.removeEventListener("scroll", handleScroll);
     };
-  }, [containerRef, dayRefs, dayCount, enabled, onDayChange]);
+    // onDayChange는 위 ref로 최신값을 따로 반영하므로 여기서는 의도적으로 뺀다 —
+    // 넣으면 호출부가 매 렌더 새 함수를 넘길 때마다 옵저버가 불필요하게 재생성된다.
+  }, [containerRef, dayRefs, dayCount, enabled]);
 
   const scrollToDay = useCallback(
     (index: number) => {
