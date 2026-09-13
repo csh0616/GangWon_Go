@@ -3,12 +3,6 @@
 // 기상청 API는 위경도가 아니라 격자 좌표(nx/ny)를 쓴다. REGION_GRID는 시군 대표 좌표를
 // kmaGrid.js의 공식(LCC 변환)으로 계산한 값이며(1주차 아키텍처 점검 이후 반영, 서울시청
 // 기준점(60,127)/부산·대전·제주 교차검증 통과).
-//
-// 블로커 (라운드3, 2026-09-10 실측): serviceKey 이중 인코딩을 고쳤는데도(라운드3 P0) 여전히
-// HTTP 403 SERVICE_KEY_IS_NOT_REGISTERED_ERROR가 난다. 같은 인코딩 수정으로 TourAPI/의료관광정보/
-// 전국문화축제표준데이터는 전부 성공했으므로 인코딩 문제가 아니라, 이 키가 "국내여행 단기예보
-// 조회서비스"(또는 동일 상품)에 대해 활용신청/승인이 안 된 상태일 가능성이 높다 — 공공데이터포털에서
-// 이 API 상품의 활용신청 상태를 확인 필요 (docs/HANDOFF_LOG.md 참고).
 require('dotenv').config();
 const path = require('path');
 const { todayKstYYYYMMDD, nowKstHourMinute } = require(path.join(__dirname, '../../server/src/lib/time'));

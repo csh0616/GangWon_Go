@@ -2375,3 +2375,57 @@ PRD 6장의 "다국어 키+치환값" 원칙은 서버 내부 템플릿 관리 �
   QA의 실제 로그인 플로우로 스모크 테스트 권장.
 - 다음 액션: QA — 로그인 토큰으로 저장 → regenerate-stop → PATCH → alerts trigger/respond
   전체 플로우 스모크 테스트.
+
+---
+
+## [2026-09-14 22:45] 백엔드팀 — 라운드5 【8】정리 + 최종 보고
+
+### 정리
+
+- `agent/src/weather.js` 상단의 라운드3 블로커 주석(KMA_SERVICE_KEY 활용신청 의심) 제거 —
+  해당 키 이슈는 이미 해결된 상태였고 코드 자체는 처음부터 정상이었다고 확인됨(더 이상
+  유효하지 않은 주석이라 삭제).
+- `agent/kma_diag.js` — 확인 결과 이미 존재하지 않음(별도 삭제 작업 불필요).
+- `monitor.js` 자동 스캔 라이브 실행(`tick()` 1회, 실제 Supabase 대상) — 에러 없이 정상
+  완료. 현재 DB에 오늘(2026-09-14) 날짜가 start_date~end_date 사이인 `active` 일정이 없어
+  `scanAndTrigger`가 0건 스캔했지만(정상 — 아직 실사용자 저장 일정이 없는 상태), 빈 날
+  스킵 가드(`!dayEntry || dayEntry.stops.length===0`)와 `dismissExpiredProposals`는 코드
+  경로상 정상 동작 확인. 실제 rain 트리거까지의 end-to-end 확인은 로그인 후 일정을 최소
+  1건 저장한 뒤 재확인 필요(QA 리허설 스크립트에 포함 권장).
+
+### 최종 보고 (라운드5 전체)
+
+**컷한 항목: 없음.** 지시된 "자를 순서"(카카오모빌리티 → is_indoor → 어디든지 →
+DELETE) 중 하나도 자르지 않고 8개 항목 전부 구현 완료. 대신 구현 중 실측으로 발견한 두
+가지를 블로커로 남긴다(둘 다 임의로 결정하지 않고 PM 확인 대기):
+
+1. **care_facilities 실데이터 부족** (【2】 항목 참고) — 응급의료기관 인제0/홍천1/평창1,
+   보건기관 3개 시군 전부 0건. PRD "시군당 최소 5건" 기준 미달.
+2. **`/generate` 응답시간이 3초 예산을 못 지킨다** (【4】 항목 참고) — 최적화 후에도
+   6~9초대(3일/9스탑 기준), 4일/20스탑(다중 시군)은 8.3초. 카카오모빌리티/LLM 호출을
+   가능한 만큼 병렬화했지만 LLM 구조화 출력 자체의 생성 속도가 하한선.
+
+**pois name_en/name_zh**: 482/482 성공, 0 실패 (【3】 참고, 상세 표는 해당 항목).
+
+**package.json diff**: `scripts/sync/package.json`에 `@anthropic-ai/sdk: ^0.32.0` 추가
+(care/pois 이름 번역, `npm install` 완료·`package-lock.json` 갱신 포함). `server/package.json`은
+이미 이 라운드 이전부터 `@anthropic-ai/sdk`를 갖고 있어 변경 없음.
+
+**측정된 `/generate` 응답시간**: 위 2번 블로커에 실측치 전부 기록(15.2초 → 6~9초대로 개선,
+3초 예산 미달 사실은 그대로 보고).
+
+**마이그레이션 안내**: `0004_care_facilities_source_swap.sql`, `0005_pois_i18n_and_indoor.sql`
+둘 다 **미적용 상태** — 승현님이 Supabase SQL Editor에서 순서대로(0004 먼저, 0005는 무관한
+테이블이라 순서 상관없음) 직접 실행 필요. 적용 전엔 `GET /api/care`가 컬럼 없음 에러(로컬
+실측 확인)를, `sync_pois.js`/`sync_care.js`의 upsert가 컬럼 없음 에러를 낸다(번역/데이터
+수집 자체는 마이그레이션과 무관하게 이미 성공 확인됨).
+
+- 블로커: 위 1/2번 (각 항목에 상세 기록).
+- 다음 액션:
+  1. 승현님 — migrations 0004/0005 Supabase SQL Editor에서 적용.
+  2. 적용 후 `scripts/sync/sync_care.js`, `scripts/sync/sync_pois.js` 재실행해 실제 DB 반영
+     확인(현재는 번역/수집 로직까지만 검증됨).
+  3. PM — care_facilities 데이터 부족(1번) 및 `/generate` 3초 예산 초과(2번) 두 블로커에 대한
+     방향 결정.
+  4. QA — regenerate-stop/PATCH/alerts trigger·respond 로그인 플로우 스모크 테스트(이번
+     라운드에선 코드 리뷰까지만 완료).
