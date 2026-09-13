@@ -30,7 +30,10 @@ async function fetchActiveItinerariesInProgress() {
 }
 
 async function checkRain(itinerary, dayEntry) {
-  const regionCode = itinerary.region_codes[0];
+  // 다중 시군 지원(라운드5 【6】) — itinerary.region_codes[0]은 첫 시군만 가리켜, 인제 날이 지나
+  // 홍천/평창 날이 됐는데도 계속 인제 날씨로 rain을 판정하는 버그가 있었다. 그 날 실제 배정된
+  // region_code(dayEntry.region_code)로 조회해야 한다 (alertTrigger.js/itineraries.js와 동일 수정).
+  const regionCode = dayEntry.region_code;
   let rainStatus;
   try {
     rainStatus = await fetchRainStatus(regionCode);

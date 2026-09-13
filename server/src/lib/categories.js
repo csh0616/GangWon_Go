@@ -22,6 +22,10 @@ const ACTIVITY_STOP_RANGE = {
 
 const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
 
+// PRD 3.5절 2.5단계 — 다중 시군 날짜 배정 시 위도 내림차순(북→남) 정렬 기준.
+// 시군 대표 좌표(agent/src/weather.js REGION_COORDS와 동일 지점 — 각 군청 소재지).
+const REGION_LAT = { injae: 38.0692, hongcheon: 37.696, pyeongchang: 37.3706 };
+
 function isValidCategoryKey(key) {
   return CATEGORY_KEYS.includes(key);
 }
@@ -38,6 +42,7 @@ module.exports = {
   RELATIONSHIP_ENUM,
   ACTIVITY_STOP_RANGE,
   REGION_CODES,
+  REGION_LAT,
   isValidCategoryKey,
   emptyWeights,
 };

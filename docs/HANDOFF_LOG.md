@@ -2294,3 +2294,84 @@ SDK가 예외를 던지지 않고 `input: {}`(빈 객체)를 그대로 준다 �
   (병렬화 최대 적용, 6~9초)을 그대로 두고 실측치를 보고하는 선에서 마무리함.**
 - 다음 액션: 위 결정 대기. 결정 전까지 프론트는 `/generate` 호출에 대해 로딩 상태를 넉넉히
   (10초 이상) 잡아두는 것을 권장.
+
+---
+
+## [2026-09-14 22:30] 백엔드팀 — 라운드5 【5】【6】【7】마이페이지/어디든지 다중시군/카카오모빌리티 통합 완료
+
+`server/src/routes/itineraries.js`를 계약 전체에 맞춰 다시 썼다. 개별 함수 단위 구현은 이전
+항목들에서 이미 끝나 있었고, 이번 항목은 그것들을 `/generate`와 나머지 라우트에 실제로
+엮는 작업이었다.
+
+### 【6】 "어디든지" + 다중 시군 (실제 Supabase+Claude로 라이브 테스트 완료)
+
+`region_codes: []` → `regionSelect.selectRegionsForAuto()`로 자유 텍스트 가중치에 맞는
+시군을 고르고(share 정규화 → score → 1위의 60% 이상만 → 최대 min(일수,3)개), 위도 내림차순으로
+연속 날짜 블록에 배정(`assignRegionsToDayBlocks`) 후 기존 단일 시군 파이프라인(`buildItineraryDays`)을
+블록별로 그대로 재사용 — 좌표 클러스터링을 다중 시군 POI 풀에 걸지 않는다는 원칙 그대로 지킴.
+
+라이브 테스트(4일, "등산이랑 온천 위주" 자유 텍스트, region_codes:[]):
+```
+selected_regions: {auto: true, region_codes: [injae, hongcheon, pyeongchang]}
+day1 injae(5stops) → day2 injae(5stops, travel_from_prev_day: injae→injae 72분)
+→ day3 hongcheon(5stops, travel_from_prev_day: injae→hongcheon 65분)
+→ day4 pyeongchang(5stops, travel_from_prev_day: hongcheon→pyeongchang 144분)
+```
+위도 내림차순(인제→홍천→평창) 배정, 4일/3시군이라 인제에 여분 하루가 붙는 것까지 전부 기대대로
+동작 확인. `region_reason`도 자동 선택 사유로 3개 언어 정상 생성됨. 아래 4개 검증 가드도
+전부 실측 확인:
+- `region_codes:[]` + `free_text` 빈 문자열 → 400 INVALID_STRUCTURED_INPUT
+- `region_codes.length > tripDays` → 400 INVALID_STRUCTURED_INPUT
+- 존재하지 않는 시군 코드 → 400 INVALID_STRUCTURED_INPUT
+- `lang` 이 ko/en/zh 아님 → 400 INVALID_LANG
+
+### 【7】 카카오모빌리티 통합
+
+`travel.js`(위 【4】 커밋에서 병렬화 완료)를 `/generate` 응답 조립 마지막 단계에 연결.
+스탑 첫 항목/빈 날 처리 전부 계약대로: 첫 스탑 `travel_from_prev` 항상 null, 전날 스탑이
+비었으면 그 이전의 스탑 있는 날 기준으로 계산, 같은 시군이어도 값을 내려보냄(실측 위 로그의
+day2 injae→injae 참고).
+
+### 【5】 마이페이지
+
+- `GET /api/itineraries`: `user_id`로 스코핑(P0 IDOR 방지 — 1주차 점검 #1과 동일 패턴을
+  여기서도 미리 막음), `status != cancelled` 제외, `stop_count`만 계산해서 반환(itinerary_json
+  원본은 서버 안에서만 쓰고 응답엔 안 실음), `start_date DESC` 정렬.
+- `DELETE /api/itineraries/:id`: 소프트 삭제(`status='cancelled'` UPDATE), 본인 소유 아니면
+  403(§2 DELETE 절이 명시한 예외 — 다른 엔드포인트의 "존재 자체를 숨기는 404" 원칙과 다름,
+  계약 문구 그대로 따름), 이미 cancelled면 재호출해도 같은 200(멱등) — 코드 로직으로 확인.
+- `completed` 상태 전환 배치는 요청대로 만들지 않음 — `monitor.js`의 기존 스캔 조건
+  (`status='active' AND 오늘이 start_date~end_date 사이`)이 여행 종료 시 자연히 감시를
+  멈추는 걸 그대로 재사용.
+
+### 부수 발견 및 수정 — 다중 시군 전환 중 놓치기 쉬운 `region_codes[0]` 버그 3곳
+
+다중 시군 이전 코드가 "이 일정의 시군"을 구할 때 전부 `itinerary.region_codes[0]`(배열의
+첫 값)만 봤다 — 단일 시군 시절엔 문제 없었지만, 다중 시군 일정에서 2일차 이후 스탑을 다루는
+로직이 전부 **1일차 시군 POI만 조회**하게 되는 조용한 버그였다. 발견한 즉시 전부
+`dayEntry.region_code`(그 스탑이 실제로 속한 날의 시군)로 고쳤다:
+- `itineraries.js` `regenerate-stop` — 교체 후보를 엉뚱한 시군에서 찾아오는 버그였음.
+- `alertTrigger.js` `createProposedAlert` — 매니징 자동 트리거가 엉뚱한 시군에서 대체 후보를
+  찾아오는 버그였음.
+- `agent/src/monitor.js` `checkRain` — 2일차 이후가 다른 시군인데 계속 1일차 시군 날씨로
+  rain을 판정하는 버그였음(가장 위험한 케이스 — 조용히 틀린 지역 날씨로 알림을 만들 뻔함).
+
+### 부수 수정 — alerts 메시지 포맷을 계약대로 복원
+
+이전 라운드에서 `alertTrigger.js`가 `{key, params}` 다국어 키+치환값 방식으로 짜여 있었는데,
+`app/lib/types.ts`의 `AlertPayload.message: Localized`와 `app/lib/mock/alerts.ts`가 전부
+완성 문장(`{ko,en,zh}`)을 쓰고 있어 프론트가 이미 이 형태로 화면을 다 만들어둔 상태였다.
+PRD 6장의 "다국어 키+치환값" 원칙은 서버 내부 템플릿 관리 방식에 대한 것으로 재해석하고,
+와이어 포맷은 완성 문장으로 되돌렸다(`MESSAGE_TEMPLATES`, rain/traffic/festival_cancelled
+3종 × 3언어). `regenerate-stop`/`PATCH`/`alerts respond`의 스탑·후보 응답도 전부
+`{poi_id,name:{ko,en,zh},category,is_indoor,lat,lng}` 형태로 통일(`scoring.js`의
+`toCandidateShape` 신설, 공용으로 사용). PATCH/alerts respond로 스탑이 교체된 뒤에는 그 날의
+`travel_from_prev`도 다시 계산해서 순서 변경이 이동시간에 반영되게 함.
+
+- 블로커: 없음(위 【2】/【4】 블로커와 무관, 이 항목 자체는 라이브 테스트까지 통과).
+- 알려진 한계: `regenerate-stop`/`PATCH`/`alerts trigger`/`respond`는 실제 Supabase Auth 토큰이
+  있어야 호출 가능해 이번 라운드에선 **코드 리뷰 + 로직 재사용 검증**까지만 하고 실제 HTTP
+  호출로는 확인 못 했다(`/generate`는 게스트 라우트라 라이브 테스트 완료). 데모 리허설 전
+  QA의 실제 로그인 플로우로 스모크 테스트 권장.
+- 다음 액션: QA — 로그인 토큰으로 저장 → regenerate-stop → PATCH → alerts trigger/respond
+  전체 플로우 스모크 테스트.
