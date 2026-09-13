@@ -47,10 +47,17 @@ export function useDayScrollSpy({
     // 대해 서로 다른 타이밍(스크롤 이벤트 vs 옵저버 콜백 큐)으로 각각 비동기 호출되므로,
     // 어느 쪽이 나중에 실행되든 항상 같은 결론에 수렴하도록 옵저버 콜백에도 바닥 체크를
     // 동일하게 넣는다 — 안 그러면 옵저버가 보정 결과를 다시 덮어써버릴 수 있다.
+    //
+    // 스크롤할 거리가 아예 없을 때(짧은 코스라 리스트가 컨테이너 안에 다 들어가는
+    // 경우, 혹은 마운트 직후 아직 레이아웃 전이라 scrollHeight/clientHeight가 둘 다
+    // 0인 순간)는 scrollTop(0) + clientHeight가 scrollHeight - 2보다 항상 크거나
+    // 같아 "바닥"으로 잘못 판정된다 — 실사용에서 코스를 만들자마자 맨 마지막 DAY로
+    // 가 있고 스크롤을 해도 전혀 안 바뀌던 버그의 원인. 실제로 스크롤할 여유가 있을
+    // 때만 바닥 판정을 적용한다.
     function isAtBottom() {
-      return root
-        ? root.scrollTop + root.clientHeight >= root.scrollHeight - 2
-        : false;
+      if (!root) return false;
+      const hasScrollRoom = root.scrollHeight - root.clientHeight > 4;
+      return hasScrollRoom && root.scrollTop + root.clientHeight >= root.scrollHeight - 2;
     }
 
     const observer = new IntersectionObserver(
