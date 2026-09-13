@@ -35,6 +35,62 @@ const SDK_LOAD_TIMEOUT_MS = 5000;
 
 type Status = "loading" | "ready" | "failed";
 
+/**
+ * SDK 로드를 모듈 스코프에 한 번만 캐시해둔다. 이유: 개발 모드의 React Strict Mode는 effect를
+ * 마운트→클린업→재마운트로 두 번 태운다. 예전 구현처럼 `<script>` 태그와 onload 핸들러를 effect
+ * 안에서 직접 관리하면, 첫 번째 마운트가 만든 태그가 DOM에 남은 채(스크립트 태그 자체는 지워지지
+ * 않음) 두 번째 마운트가 "이미 있는 태그"로 오인해 로드 완료를 기다리지 않고 지나가 버리고, 정작
+ * 그 태그의 onload는 첫 번째 마운트의 콜백(이미 cancelled)만 붙어 있어 아무 것도 실행되지 않는다
+ * — 카카오맵 제품을 활성화한 뒤 실측하다가 "영원히 불러오는 중"에 멈추는 걸로 발견했다. 프로미스를
+ * 모듈 전역에 캐시해두면 몇 번을 다시 mount해도 항상 같은 로드 시도를 공유해 이 문제가 없다.
+ */
+let kakaoSdkPromise: Promise<void> | null = null;
+
+function loadKakaoSdk(): Promise<void> {
+  if (kakaoSdkPromise) return kakaoSdkPromise;
+
+  kakaoSdkPromise = new Promise<void>((resolve, reject) => {
+    if (window.kakao?.maps?.LatLng) {
+      resolve();
+      return;
+    }
+
+    const onSdkScriptLoaded = () => {
+      if (!window.kakao) {
+        reject(new Error("kakao maps sdk script loaded but window.kakao missing"));
+        return;
+      }
+      window.kakao.maps.load(() => resolve());
+    };
+
+    const scriptId = "kakao-maps-sdk";
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing) {
+      if (window.kakao) {
+        onSdkScriptLoaded();
+      } else {
+        existing.addEventListener("load", onSdkScriptLoaded, { once: true });
+      }
+      existing.addEventListener("error", () => reject(new Error("kakao sdk script error")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_KEY}&autoload=false`;
+    script.onload = onSdkScriptLoaded;
+    script.onerror = () => reject(new Error("kakao sdk script error"));
+    document.head.appendChild(script);
+  });
+
+  // 실패하면 캐시를 비워 다음 시도(재시도 버튼)가 새로 시도할 수 있게 한다
+  kakaoSdkPromise.catch(() => {
+    kakaoSdkPromise = null;
+  });
+
+  return kakaoSdkPromise;
+}
+
 function buildMarkerEl(label: string): HTMLDivElement {
   const el = document.createElement("div");
   el.style.cssText =
@@ -79,46 +135,34 @@ export function MapView({
   const watchIdRef = useRef<number | null>(null);
 
   const [status, setStatus] = useState<Status>(KAKAO_KEY ? "loading" : "failed");
+  const [retryTick, setRetryTick] = useState(0);
   const t = useTranslations("result");
   const tc = useTranslations("common");
   const locale = useLocale() as UiLocale;
 
-  // 1) SDK 로드 + 지도 인스턴스 생성 — 마운트 시 한 번만
+  // 1) SDK 로드 + 지도 인스턴스 생성. retryTick이 바뀌면(재시도 버튼) 다시 시도한다.
   useEffect(() => {
     if (!KAKAO_KEY || !containerRef.current) return;
     let cancelled = false;
     const timeout = setTimeout(() => !cancelled && setStatus("failed"), SDK_LOAD_TIMEOUT_MS);
 
-    const scriptId = "kakao-maps-sdk";
-    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
-
-    function init() {
-      if (cancelled || !window.kakao || !containerRef.current) return;
-      window.kakao.maps.load(() => {
+    loadKakaoSdk()
+      .then(() => {
         if (cancelled || !containerRef.current || !window.kakao) return;
         clearTimeout(timeout);
         const center = new window.kakao.maps.LatLng(37.5, 128.4);
         mapRef.current = new window.kakao.maps.Map(containerRef.current, { center, level: 8 });
         setStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("failed");
       });
-    }
-
-    if (existing) {
-      init();
-    } else {
-      const script = document.createElement("script");
-      script.id = scriptId;
-      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_KEY}&autoload=false`;
-      script.onload = init;
-      script.onerror = () => !cancelled && setStatus("failed");
-      document.head.appendChild(script);
-    }
 
     return () => {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, []);
+  }, [retryTick]);
 
   // 2) day(또는 언어)가 바뀔 때마다 마커·경로선만 다시 그림 — 지도 인스턴스는 그대로 재사용
   useEffect(() => {
@@ -211,6 +255,7 @@ export function MapView({
           type="button"
           onClick={() => {
             setStatus(KAKAO_KEY ? "loading" : "failed");
+            setRetryTick((n) => n + 1);
             onRetry?.();
           }}
           className="mt-1 flex items-center gap-1.5 rounded-full bg-bg px-4 py-2 text-[12.5px] font-semibold text-ink-soft shadow-sm"
