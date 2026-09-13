@@ -36,8 +36,11 @@ export function MainForm() {
   const regionMissing = !effectiveAutoMode && selectedRegions.length === 0;
   const relationshipMissing = relationship === null;
   const tooMany = !effectiveAutoMode && selectedRegions.length > dayCount;
+  // API_CONTRACT.md §0.1 — 여행 기간 상한 10일 초과는 400 INVALID_STRUCTURED_INPUT.
+  // 종료일 input의 max로도 애초에 못 고르게 막지만(DateRangeField), 방어적으로 한 번 더 검증.
+  const tooLong = dayCount > 10;
   const requiredMissingCount = (regionMissing ? 1 : 0) + (relationshipMissing ? 1 : 0);
-  const canSubmit = requiredMissingCount === 0 && !tooMany;
+  const canSubmit = requiredMissingCount === 0 && !tooMany && !tooLong;
 
   const missingLabels = useMemo(() => {
     const labels: string[] = [];
@@ -130,7 +133,11 @@ export function MainForm() {
           />
         </Section>
 
-        <Section label={t("dateLabel")} hint={t("dateHint")}>
+        <Section
+          label={t("dateLabel")}
+          hint={submitAttempted && tooLong ? t("dateTooLong") : t("dateHint")}
+          hintTone={submitAttempted && tooLong ? "danger" : "default"}
+        >
           <DateRangeField
             startDate={startDate}
             endDate={endDate}
@@ -164,6 +171,11 @@ export function MainForm() {
               <span className="text-[12.5px] font-semibold text-muted">
                 {t("regionHintTooMany", { count: selectedRegions.length })}
               </span>
+            </>
+          ) : tooLong ? (
+            <>
+              <AlertCircle size={15} className="text-muted" strokeWidth={1.6} />
+              <span className="text-[12.5px] font-semibold text-muted">{t("dateTooLong")}</span>
             </>
           ) : requiredMissingCount > 0 ? (
             <>
