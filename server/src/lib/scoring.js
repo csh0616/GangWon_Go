@@ -33,6 +33,11 @@ function dateForDayIndex(startDate, index) {
   return d;
 }
 
+// 다중 시군 날짜 배정(PRD 3.5절 2.5단계)에서 각 시군 블록의 시작/종료일을 계산할 때 쓴다.
+function addDaysToDateString(startDate, index) {
+  return dateForDayIndex(startDate, index).toISOString().slice(0, 10);
+}
+
 function festivalOverlapsDate(poi, date) {
   if (!poi.event_start_date || !poi.event_end_date) return false;
   const es = new Date(`${poi.event_start_date}T00:00:00Z`);
@@ -52,11 +57,18 @@ function festivalOverlapsRange(poi, startDate, endDate) {
 function toStopShape(poi, order) {
   return {
     poi_id: poi.id,
-    name: poi.name,
+    // 라운드5 【3】 — name이 문자열 → {ko,en,zh} 객체로 변경. ko는 TourAPI 원본이라 항상 있고,
+    // en/zh는 배치 동기화 시 생성 실패하면 null일 수 있다(pois.name_en/name_zh 그대로 옮김).
+    name: { ko: poi.name, en: poi.name_en ?? null, zh: poi.name_zh ?? null },
     category: poi.category,
+    is_indoor: poi.is_indoor ?? false,
     lat: poi.lat,
     lng: poi.lng,
     order,
+    // blurb/travel_from_prev는 LLM/카카오모빌리티 호출 결과라 이 함수(순수 스코어링) 밖에서
+    // 채운다 — 호출부(routes/itineraries.js)가 이 placeholder를 덮어쓴다.
+    blurb: null,
+    travel_from_prev: null,
   };
 }
 
@@ -69,8 +81,12 @@ function toStopShape(poi, order) {
  * @param {string} activityLevel - low|medium|high
  * @param {string} startDate, endDate - YYYY-MM-DD
  * @param {string[]} [excludePoiIds] - 이미 코스에 쓰인 POI 제외 (부분 재구성 재사용 대비)
+ * @param {number} [dayNumberOffset] - 다중 시군 날짜 배정(PRD 3.5절 2.5단계)에서 이 블록이 전체
+ *   여행의 몇 일차부터 시작하는지. 이 함수는 여전히 startDate~endDate 범위만 계산하고, 반환하는
+ *   day 번호에 이 오프셋을 더할 뿐이다 — 스코어링/클러스터링/2-opt 로직은 전혀 바뀌지 않는다.
+ * @param {string} [regionCode] - 이 블록에 배정된 단일 시군 (다중 시군 요청일 때 day.region_code로 표시)
  */
-function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, excludePoiIds = [] }) {
+function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, excludePoiIds = [], dayNumberOffset = 0, regionCode = null }) {
   const excludeSet = new Set(excludePoiIds);
   const numDays = daysCount(startDate, endDate);
   const [, maxPerDay] = ACTIVITY_STOP_RANGE[activityLevel] || ACTIVITY_STOP_RANGE.medium;
@@ -168,8 +184,31 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
   return dayPlans.map((dp, idx) => {
     const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
     const ordered = twoOptOptimize(stops, { pinFirst: !!dp.anchor });
-    return { day: idx + 1, date: dp.date.toISOString().slice(0, 10), stops: ordered.map((p, i) => toStopShape(p, i + 1)) };
+    return {
+      day: dayNumberOffset + idx + 1,
+      date: dp.date.toISOString().slice(0, 10),
+      region_code: regionCode,
+      // travel_from_prev_day는 시군 간 이동(카카오모빌리티)이라 여기서 계산 안 함 — 호출부가
+      // 전체 days 배열을 조립한 뒤 한 번에 채운다(day 1 항상 null, 이후는 전날 마지막 스탑 기준).
+      travel_from_prev_day: null,
+      stops: ordered.map((p, i) => toStopShape(p, i + 1)),
+    };
   });
+}
+
+/**
+ * regenerate-stop 후보 / alerts trigger candidate_poi 공용 (라운드5 【3】) — toStopShape와 같은
+ * name/is_indoor 객체화 규칙을 쓰되, order/blurb/travel_from_prev는 그 호출부 문맥에서 각자 채운다.
+ */
+function toCandidateShape(poi) {
+  return {
+    poi_id: poi.id,
+    name: { ko: poi.name, en: poi.name_en ?? null, zh: poi.name_zh ?? null },
+    category: poi.category,
+    is_indoor: poi.is_indoor ?? false,
+    lat: poi.lat,
+    lng: poi.lng,
+  };
 }
 
 /**
@@ -189,9 +228,11 @@ module.exports = {
   filterByRelationship,
   daysCount,
   dateForDayIndex,
+  addDaysToDateString,
   festivalOverlapsDate,
   festivalOverlapsRange,
   buildItineraryDays,
   pickTopCandidates,
   toStopShape,
+  toCandidateShape,
 };
