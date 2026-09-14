@@ -11,6 +11,7 @@ const {
   festivalOverlapsDate,
   addDaysToDateString,
   toCandidateShape,
+  sanitizeStoredDays,
 } = require('../lib/scoring');
 const { extractPreferenceWeights, extractStopWeights, generateNarrationBundle, generateCandidateBlurbs, emptyLocalized } = require('../lib/llm');
 const { selectRegionsForAuto, assignRegionsToDayBlocks } = require('../lib/regionSelect');
@@ -307,7 +308,11 @@ router.get('/:id', requireAuth, async (req, res, next) => {
       .maybeSingle();
     if (error) throw error;
     if (!itinerary) throw apiError(404, 'NOT_FOUND', '일정을 찾을 수 없습니다.');
-    res.status(200).json({ data: itinerary, error: null });
+
+    // P0-1 — 이 수정 이전에 저장된 itinerary_json은 category에 TourAPI 원본 코드가 남아있을 수
+    // 있다. 응답 직전에 한 번 더 마스터 키인지 검증한다(재동기화로는 못 고치는 과거 데이터 방어).
+    const sanitized = { ...itinerary, itinerary_json: { ...itinerary.itinerary_json, days: sanitizeStoredDays(itinerary.itinerary_json.days) } };
+    res.status(200).json({ data: sanitized, error: null });
   } catch (err) {
     next(err);
   }
@@ -452,7 +457,10 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
       days[updatedDayIndex] = { ...days[updatedDayIndex], stops: await fillTravelFromPrev(days[updatedDayIndex].stops) };
     }
 
-    const newItineraryJson = { ...itinerary.itinerary_json, days };
+    // P0-1 — 교체 대상이 아닌 나머지 스탑은 위에서 그대로 통과(pass-through)되므로, 이 수정
+    // 이전에 저장된 legacy category(TourAPI 원본 코드)가 남아있다면 여기서 정리한다. 저장까지
+    // 정리해두면 다음 조회부터는 별도 방어 없이도 항상 마스터 키만 나간다.
+    const newItineraryJson = { ...itinerary.itinerary_json, days: sanitizeStoredDays(days) };
     const { error: updateErr } = await supabaseAdmin.from('itineraries').update({ itinerary_json: newItineraryJson }).eq('id', itinerary.id);
     if (updateErr) throw updateErr;
 
