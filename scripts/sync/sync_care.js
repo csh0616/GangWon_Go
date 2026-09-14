@@ -1,14 +1,13 @@
-// PRD 5장/8장 — 여행 케어 안내 배치 동기화 (라운드5 【2】, MdclTursmService를 대체).
-// 실행: `node sync_care.js` (TOURAPI_SERVICE_KEY 재사용, KAKAO_MOBILITY_API_KEY로 지오코딩,
+// PRD 5장/8장 — 여행 케어 안내 배치 동기화. 실행: `node sync_care.js` (TOURAPI_SERVICE_KEY 재사용,
 // ANTHROPIC_API_KEY로 name_en/name_zh 1회 생성 — 전부 server/.env 폴백으로 읽음).
 require('dotenv').config();
-const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
-const { fetchAllEmergencyFacilities, fetchAllHealthInstitutions } = require('./care_sources');
-const { geocodeAddress } = require('./geocode');
+const { fetchAllEmergencyFacilities, fetchHospitalsAndClinics } = require('./care_sources');
 const { translateName } = require('./translate_name');
 const { isValidKoreaCoord } = require('./geo_validate');
+const { mapWithConcurrency } = require('./concurrency');
 
+const TRANSLATE_CONCURRENCY = 8;
 const REGION_KEYWORDS = { injae: '인제군', hongcheon: '홍천군', pyeongchang: '평창군' };
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -20,39 +19,34 @@ function detectRegionByAddress(addr) {
   return found ? found[0] : null;
 }
 
-function detectRegionBySgg(sggNm) {
-  const found = Object.entries(REGION_KEYWORDS).find(([, keyword]) => sggNm === keyword);
-  return found ? found[0] : null;
-}
-
-// htctTypeNm(보건소/보건지소/보건진료소) → API_CONTRACT.md §4 category enum
-// (emergency_room/health_center/health_subcenter/hospital). 보건진료소는 보건지소보다도 더 소규모인
-// 리 단위 1차 의료기관이라 health_subcenter로 묶는다 — 계약에 별도 카테고리가 없다.
-function healthCategoryFor(htctTypeNm) {
-  if ((htctTypeNm || '').includes('보건소')) return 'health_center';
-  return 'health_subcenter'; // 보건지소, 보건진료소 등
-}
-
-function stableHash(input) {
-  return crypto.createHash('sha1').update(input).digest('hex').slice(0, 12);
+// 라운드6 【2】 — 전국 병·의원 찾기 서비스의 dutyDivNam(치과의원/보건소/의원/한의원/병원/종합병원/
+// 요양병원/기타(구급차) 등 실측 확인)을 API_CONTRACT.md §4 category로 매핑한다. "기타(구급차)"처럼
+// 실제로 찾아갈 수 있는 의료기관이 아닌 항목은 null을 반환해 후보에서 제외한다 — 건수를 채우려고
+// 애매한 항목까지 넣지 않는다(PRD 8장 원칙).
+function hospitalCategoryFor(dutyDivNam) {
+  const name = dutyDivNam || '';
+  if (name.includes('보건소')) return 'health_center';
+  if (name.includes('병원')) return 'hospital'; // 병원/종합병원/요양병원
+  if (name.includes('의원')) return 'clinic'; // 의원/치과의원/한의원
+  return null;
 }
 
 async function buildEmergencyRows(syncStartedAt) {
   const all = await fetchAllEmergencyFacilities();
-  const rows = [];
-  for (const raw of all) {
-    const regionCode = detectRegionByAddress(raw.dutyAddr);
-    if (!regionCode) continue; // eslint-disable-line no-continue
-    const lat = Number(raw.wgs84Lat);
-    const lng = Number(raw.wgs84Lon);
-    if (!isValidKoreaCoord(lat, lng)) {
-      console.warn(`[sync_care] 응급의료기관 좌표 범위 밖 제외 - ${raw.dutyName}`);
-      continue; // eslint-disable-line no-continue
-    }
+  const candidates = all
+    .map((raw) => ({ raw, regionCode: detectRegionByAddress(raw.dutyAddr) }))
+    .filter(({ regionCode }) => regionCode)
+    .filter(({ raw }) => {
+      const ok = isValidKoreaCoord(Number(raw.wgs84Lat), Number(raw.wgs84Lon));
+      if (!ok) console.warn(`[sync_care] 응급의료기관 좌표 범위 밖 제외 - ${raw.dutyName}`);
+      return ok;
+    });
+
+  return mapWithConcurrency(candidates, TRANSLATE_CONCURRENCY, async ({ raw, regionCode }) => {
     const nameKo = raw.dutyName;
-    // eslint-disable-next-line no-await-in-loop
     const { en: nameEn, zh: nameZh } = await translateName(nameKo, 'care');
-    rows.push({
+    console.log(`[sync_care] 응급의료기관 ${nameKo} (${regionCode}) 번역 완료`);
+    return {
       content_id: `care-emerg-${raw.hpid}`,
       region_code: regionCode,
       name_ko: nameKo,
@@ -61,66 +55,62 @@ async function buildEmergencyRows(syncStartedAt) {
       category: 'emergency_room',
       phone: raw.dutyTel1 || null,
       address_ko: raw.dutyAddr,
-      lat,
-      lng,
+      lat: Number(raw.wgs84Lat),
+      lng: Number(raw.wgs84Lon),
       synced_at: syncStartedAt,
-    });
-    console.log(`[sync_care] 응급의료기관 ${nameKo} (${regionCode}) 번역 완료`);
-  }
-  return rows;
+    };
+  });
 }
 
-async function buildHealthInstitutionRows(syncStartedAt) {
-  const all = await fetchAllHealthInstitutions();
-  const rows = [];
-  for (const raw of all) {
-    const regionCode = detectRegionBySgg(raw.sggNm);
-    if (!regionCode) continue; // eslint-disable-line no-continue
+async function buildHospitalClinicRows(syncStartedAt) {
+  const perRegion = await Promise.all(
+    Object.entries(REGION_KEYWORDS).map(async ([regionCode, sggName]) => {
+      const rows = await fetchHospitalsAndClinics(sggName);
+      return rows.map((raw) => ({ raw, regionCode }));
+    })
+  );
+  const candidates = perRegion
+    .flat()
+    .map(({ raw, regionCode }) => ({ raw, regionCode, category: hospitalCategoryFor(raw.dutyDivNam) }))
+    .filter(({ category, raw }) => {
+      if (!category) {
+        console.warn(`[sync_care] 분류 불가(비의료기관으로 판단) 제외 - ${raw.dutyName} (${raw.dutyDivNam})`);
+        return false;
+      }
+      const ok = isValidKoreaCoord(Number(raw.wgs84Lat), Number(raw.wgs84Lon));
+      if (!ok) console.warn(`[sync_care] 병·의원 좌표 범위 밖 제외 - ${raw.dutyName}`);
+      return ok;
+    });
 
-    const address = raw.lctnRoadNmAddr || raw.lctnLotnoAddr;
-    if (!address) {
-      console.warn(`[sync_care] 주소 없는 보건기관 제외 - ${raw.htInstNm}`);
-      continue; // eslint-disable-line no-continue
-    }
-    // eslint-disable-next-line no-await-in-loop
-    const coord = await geocodeAddress(address);
-    if (!coord || !isValidKoreaCoord(coord.lat, coord.lng)) {
-      console.warn(`[sync_care] 지오코딩 실패/좌표 범위 밖 제외 - ${raw.htInstNm} (${address})`);
-      continue; // eslint-disable-line no-continue
-    }
-
-    const nameKo = raw.htInstNm;
-    // eslint-disable-next-line no-await-in-loop
+  return mapWithConcurrency(candidates, TRANSLATE_CONCURRENCY, async ({ raw, regionCode, category }) => {
+    const nameKo = raw.dutyName;
     const { en: nameEn, zh: nameZh } = await translateName(nameKo, 'care');
-    const contentId = `care-health-${raw.insttCode || 'unknown'}-${stableHash(`${nameKo}|${address}`)}`;
-
-    rows.push({
-      content_id: contentId,
+    console.log(`[sync_care] 병·의원 ${nameKo} (${regionCode}, ${raw.dutyDivNam} → ${category}) 번역 완료`);
+    return {
+      content_id: `care-hosp-${raw.hpid}`,
       region_code: regionCode,
       name_ko: nameKo,
       name_en: nameEn,
       name_zh: nameZh,
-      category: healthCategoryFor(raw.htctTypeNm),
-      phone: raw.telno || null,
-      address_ko: address,
-      lat: coord.lat,
-      lng: coord.lng,
+      category,
+      phone: raw.dutyTel1 || null,
+      address_ko: raw.dutyAddr,
+      lat: Number(raw.wgs84Lat),
+      lng: Number(raw.wgs84Lon),
       synced_at: syncStartedAt,
-    });
-    console.log(`[sync_care] 보건기관 ${nameKo} (${regionCode}, ${raw.htctTypeNm}) 지오코딩+번역 완료`);
-  }
-  return rows;
+    };
+  });
 }
 
 async function main() {
   const syncStartedAt = new Date().toISOString();
   let rows = [];
   try {
-    const [emergencyRows, healthRows] = await Promise.all([
+    const [emergencyRows, hospitalRows] = await Promise.all([
       buildEmergencyRows(syncStartedAt),
-      buildHealthInstitutionRows(syncStartedAt),
+      buildHospitalClinicRows(syncStartedAt),
     ]);
-    rows = [...emergencyRows, ...healthRows];
+    rows = [...emergencyRows, ...hospitalRows];
   } catch (err) {
     console.error('[sync_care] 데이터 수집 실패:', err.message, err.cause ? `| cause: ${err.cause}` : '');
     return;
@@ -137,8 +127,8 @@ async function main() {
     return;
   }
 
-  // 지역별로 이번 실행보다 오래된 로우 정리 (sync_pois.js와 동일 패턴) — 시드(content_id가
-  // 'seed-'로 시작)도 synced_at이 더 예전이라 자동으로 함께 정리된다.
+  // 지역별로 이번 실행보다 오래된 로우 정리(sync_pois.js와 동일 패턴) — 폐기된 보건기관표준데이터
+  // 로우(content_id가 'care-health-'로 시작, PRD 5장)도 synced_at이 더 예전이라 자동으로 정리된다.
   const regionCodes = [...new Set(rows.map((r) => r.region_code))];
   const { error: cleanupErr } = await supabase.from('care_facilities').delete().in('region_code', regionCodes).lt('synced_at', syncStartedAt);
   if (cleanupErr) {
@@ -146,7 +136,11 @@ async function main() {
     return;
   }
 
-  console.log(`[sync_care] 총 ${rows.length}건 동기화 완료 (${regionCodes.join(', ')})`);
+  const byRegion = {};
+  rows.forEach((r) => {
+    byRegion[r.region_code] = (byRegion[r.region_code] || 0) + 1;
+  });
+  console.log(`[sync_care] 총 ${rows.length}건 동기화 완료`, byRegion);
 }
 
 main();

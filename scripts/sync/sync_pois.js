@@ -6,6 +6,7 @@ const { fetchAreaBasedList, fetchFestivalDates } = require('./tourapi_client');
 const { mapTourApiCategory } = require('./category_mapping');
 const { isValidKoreaCoord } = require('./geo_validate');
 const { translateName } = require('./translate_name');
+const { mapWithConcurrency } = require('./concurrency');
 
 const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
 const TRANSLATE_CONCURRENCY = 8; // Claude 호출 병렬 상한 — 487건을 순차로 하면 너무 오래 걸림
@@ -21,20 +22,6 @@ const TAG_INDOOR_MAP = {
   shopping: true,
   leisure_sports: false,
 };
-
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let index = 0;
-  async function worker() {
-    while (index < items.length) {
-      const i = index;
-      index += 1;
-      results[i] = await fn(items[i], i);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
