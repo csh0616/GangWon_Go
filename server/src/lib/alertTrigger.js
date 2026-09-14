@@ -5,9 +5,10 @@
 const { supabaseAdmin } = require('../config/supabaseClient');
 const { apiError } = require('../middleware/errorHandler');
 const { filterOutdoorForRain } = require('./alertAdjust');
-const { filterByRelationship, pickTopCandidates, dateForDayIndex, festivalOverlapsDate } = require('./scoring');
+const { filterByRelationship, pickTopCandidates, dateForDayIndex, festivalOverlapsDate, toCandidateShape } = require('./scoring');
 const { filterWithinDuration } = require('./directions');
 const { twoOptOptimize, haversineKm } = require('./geo');
+const { fillTravelFromPrev } = require('./travel');
 
 const TRAFFIC_RADIUS_SECONDS = 15 * 60;
 // 카카오모빌리티 API가 전부 실패했을 때만 쓰는 Haversine 근사 반경 — 산간지형 평균 주행속도를
@@ -15,18 +16,32 @@ const TRAFFIC_RADIUS_SECONDS = 15 * 60;
 const TRAFFIC_FALLBACK_RADIUS_KM = 10;
 const TIMEOUT_MINUTES = 3;
 
-// PRD 6장 (1주차 점검) — 알림 문구는 서버가 완성된 문장을 하드코딩하지 않고 다국어 키 + 치환값으로
-// 내려보내 프론트가 조립한다. API_CONTRACT.md §3의 기존 예시(완성 문장)는 이 규칙 반영 전 예시라
-// HANDOFF_LOG에 갱신 제안을 남긴다.
-const MESSAGE_KEY_BY_CONDITION = {
-  rain: 'alert.rain',
-  traffic: 'alert.traffic',
-  festival_cancelled: 'alert.festival_cancelled',
+// 라운드5 — 알림 문구를 다국어 키+치환값에서 완성 문장으로 되돌림. app/lib/types.ts의
+// AlertPayload.message가 Localized({ko,en,zh})이고 app/lib/mock/alerts.ts도 완성 문장을 쓰고
+// 있어, 프론트가 이미 이 형태로 화면을 다 만들어뒀다 — {key,params} 방식은 폐기한다
+// (HANDOFF_LOG.md 갱신 제안 참고). PRD 6장 "다국어 키+치환값" 원칙은 서버 내부 템플릿 관리
+// 방식을 말하는 것으로 재해석하고, 와이어 포맷은 계약대로 완성 문장을 내려보낸다.
+const MESSAGE_TEMPLATES = {
+  rain: {
+    ko: (prev, cand) => `비가 옵니다. ${prev}를(을) ${cand}로 변경할까요?`,
+    en: (prev, cand) => `It's raining. Replace ${prev} with ${cand}?`,
+    zh: (prev, cand) => `下雨了。要把${prev}换成${cand}吗？`,
+  },
+  traffic: {
+    ko: (prev, cand) => `이동 시간이 많이 걸립니다. ${prev}를(을) ${cand}로 변경할까요?`,
+    en: (prev, cand) => `This route is taking too long. Replace ${prev} with ${cand}?`,
+    zh: (prev, cand) => `路上耗时过长。要把${prev}换成${cand}吗？`,
+  },
+  festival_cancelled: {
+    ko: (prev, cand) => `축제가 취소되었습니다. ${prev}를(을) ${cand}로 변경할까요?`,
+    en: (prev, cand) => `The festival was cancelled. Replace ${prev} with ${cand}?`,
+    zh: (prev, cand) => `活动已取消。要把${prev}换成${cand}吗？`,
+  },
 };
 
 // DB의 alert_trigger_type enum과 동일 — 라우트가 잘못된 값을 걸러내는 데 사용 (라운드2 점검 #7).
 const ALLOWED_TRIGGER_TYPES = ['weather', 'traffic', 'festival'];
-const ALLOWED_CONDITIONS = Object.keys(MESSAGE_KEY_BY_CONDITION);
+const ALLOWED_CONDITIONS = Object.keys(MESSAGE_TEMPLATES);
 
 // trigger_type/condition은 각각은 유효해도 조합이 말이 안 될 수 있다(예: weather+festival_cancelled) —
 // PRD 3.5절 상황별 조정표의 실제 짝만 허용 (라운드3 점검 #11, 데모 트리거 버튼 오조작 방지).
@@ -40,10 +55,21 @@ function isValidTriggerConditionPair(triggerType, condition) {
   return (VALID_TRIGGER_CONDITION_PAIRS[triggerType] || []).includes(condition);
 }
 
+// previousName/candidateName은 {ko,en,zh} 형태(스탑에 저장된 name 객체, 혹은 pois row에서 새로
+// 조립한 값) — 문장에 끼워 넣을 때 en/zh가 비어 있으면 ko로 대체한다(빈 이름으로 문장이 깨지지 않게).
+function localizedNameOf(name) {
+  if (typeof name === 'string') return { ko: name, en: name, zh: name };
+  return { ko: name.ko, en: name.en ?? name.ko, zh: name.zh ?? name.ko };
+}
+
 function buildMessagePayload(condition, previousName, candidateName) {
+  const prev = localizedNameOf(previousName);
+  const cand = localizedNameOf(candidateName);
+  const templates = MESSAGE_TEMPLATES[condition] || MESSAGE_TEMPLATES.rain;
   return {
-    key: MESSAGE_KEY_BY_CONDITION[condition] || 'alert.generic',
-    params: { previous_poi_name: previousName, candidate_poi_name: candidateName },
+    ko: templates.ko(prev.ko, cand.ko),
+    en: templates.en(prev.en, cand.en),
+    zh: templates.zh(prev.zh, cand.zh),
   };
 }
 
@@ -98,19 +124,23 @@ async function createProposedAlert({ itineraryId, userId, triggerType, condition
     return {
       alert: existing,
       isDuplicate: true,
-      message: buildMessagePayload(existing.condition, previousStop.name, candidatePoi ? candidatePoi.name : existing.proposed_poi_id),
+      message: buildMessagePayload(
+        existing.condition,
+        previousStop.name,
+        candidatePoi ? { ko: candidatePoi.name, en: candidatePoi.name_en, zh: candidatePoi.name_zh } : existing.proposed_poi_id
+      ),
       proposedStop: {
         day,
         previous_poi_id: targetPoiId,
-        candidate_poi: candidatePoi
-          ? { poi_id: candidatePoi.id, name: candidatePoi.name, category: candidatePoi.category, lat: candidatePoi.lat, lng: candidatePoi.lng }
-          : { poi_id: existing.proposed_poi_id },
+        candidate_poi: candidatePoi ? toCandidateShape(candidatePoi) : { poi_id: existing.proposed_poi_id },
       },
     };
   }
 
   const allUsedPoiIds = itinerary.itinerary_json.days.flatMap((d) => d.stops.map((s) => s.poi_id));
-  const regionCode = itinerary.region_codes[0];
+  // 다중 시군 지원(라운드5 【6】) — itinerary.region_codes[0]은 첫 시군만 가리켜 다른 시군 날의
+  // 교체 후보를 엉뚱한 시군에서 찾아오는 버그가 있었다. 실제 대상 스탑이 속한 날의 region_code를 쓴다.
+  const regionCode = dayEntry.region_code;
 
   const { data: regionPois, error: poisErr } = await supabaseAdmin.from('pois').select('*').eq('region_code', regionCode);
   if (poisErr) throw poisErr;
@@ -169,17 +199,11 @@ async function createProposedAlert({ itineraryId, userId, triggerType, condition
   return {
     alert: inserted,
     isDuplicate: false,
-    message: buildMessagePayload(condition, previousStop.name, topCandidate.name),
+    message: buildMessagePayload(condition, previousStop.name, { ko: topCandidate.name, en: topCandidate.name_en, zh: topCandidate.name_zh }),
     proposedStop: {
       day,
       previous_poi_id: targetPoiId,
-      candidate_poi: {
-        poi_id: topCandidate.id,
-        name: topCandidate.name,
-        category: topCandidate.category,
-        lat: topCandidate.lat,
-        lng: topCandidate.lng,
-      },
+      candidate_poi: toCandidateShape(topCandidate),
     },
   };
 }
@@ -213,16 +237,22 @@ async function respondToAlert({ alertId, userId, response }) {
   if (poiErr) throw poiErr;
   if (!candidatePoi) throw apiError(404, 'NOT_FOUND', '대체 후보 POI를 찾을 수 없습니다.');
 
-  const days = itinerary.itinerary_json.days.map((d) => {
+  let updatedDayIndex = -1;
+  const days = itinerary.itinerary_json.days.map((d, idx) => {
     if (d.day !== alert.day) return d;
+    updatedDayIndex = idx;
     const replacedStops = d.stops.map((s) =>
-      s.poi_id === alert.previous_poi_id
-        ? { poi_id: candidatePoi.id, name: candidatePoi.name, category: candidatePoi.category, lat: candidatePoi.lat, lng: candidatePoi.lng }
-        : s
+      s.poi_id === alert.previous_poi_id ? { ...toCandidateShape(candidatePoi), blurb: null, travel_from_prev: null } : s
     );
     const reordered = twoOptOptimize(replacedStops, { pinFirst: false });
     return { ...d, stops: reordered.map((s, i) => ({ ...s, order: i + 1 })) };
   });
+
+  // 교체로 스탑 순서가 바뀌었으니 그 날의 travel_from_prev를 다시 계산한다 — 실패하면 travel.js가
+  // 이미 필드 전체를 null로 두므로 여기서 별도 폴백은 필요 없다.
+  if (updatedDayIndex !== -1) {
+    days[updatedDayIndex] = { ...days[updatedDayIndex], stops: await fillTravelFromPrev(days[updatedDayIndex].stops) };
+  }
 
   const newItineraryJson = { ...itinerary.itinerary_json, days };
 

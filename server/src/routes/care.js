@@ -14,12 +14,12 @@ router.get('/', async (req, res, next) => {
       throw apiError(400, 'INVALID_STRUCTURED_INPUT', `region_code는 ${REGION_CODES.join('|')} 중 하나여야 합니다.`);
     }
 
-    // care_facilities가 name_en/name_zh/address_en/address_zh로 다국어 개편됨 (0002 마이그레이션,
-    // PRD 4장 갱신 — 의료관광정보 서비스가 한국어를 아예 제공하지 않아 단일 name 컬럼을 못 씀).
-    // 프론트가 이미 알고 있는 현재 로케일에 맞는 필드를 골라 쓰면 되므로 lang 파라미터 없이 둘 다 반환.
+    // care_facilities 데이터 소스 교체(라운드5 【2】, 0004 마이그레이션) — 국립중앙의료원 응급의료기관
+    // 조회 서비스로 바뀌면서 한국어 명칭/주소가 원본으로 들어온다. name_ko/address_ko는 원본 그대로,
+    // name_en/name_zh는 동기화 시점 1회 생성(API_CONTRACT.md §4 — 한국어+사용자 언어 항상 병행 표기).
     const { data, error } = await supabaseAdmin
       .from('care_facilities')
-      .select('name_en, name_zh, category, phone, address_en, address_zh, lat, lng')
+      .select('name_ko, name_en, name_zh, category, phone, address_ko, lat, lng')
       .eq('region_code', regionCode);
     if (error) throw error;
 

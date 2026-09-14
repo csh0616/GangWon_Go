@@ -5,8 +5,36 @@ const { createClient } = require('@supabase/supabase-js');
 const { fetchAreaBasedList, fetchFestivalDates } = require('./tourapi_client');
 const { mapTourApiCategory } = require('./category_mapping');
 const { isValidKoreaCoord } = require('./geo_validate');
+const { translateName } = require('./translate_name');
 
 const REGION_CODES = ['injae', 'hongcheon', 'pyeongchang'];
+const TRANSLATE_CONCURRENCY = 8; // Claude 호출 병렬 상한 — 487건을 순차로 하면 너무 오래 걸림
+
+// is_indoor(라운드5 【3】) — 콘텐츠타입+카테고리로 이미 정해진 7개 태그를 근거로 매핑한다.
+// 표시 전용(매니징 제안 모달의 배지)이며, rain 트리거 판정은 그대로 태그 기준을 쓴다(바꾸지 않음).
+const TAG_INDOOR_MAP = {
+  nature_hiking: false,
+  onsen_wellness: true,
+  culture_history: true,
+  food_local: true,
+  festival_event: false,
+  shopping: true,
+  leisure_sports: false,
+};
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let index = 0;
+  async function worker() {
+    while (index < items.length) {
+      const i = index;
+      index += 1;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -53,6 +81,7 @@ async function syncRegion(regionCode) {
       lat,
       lng,
       tags: [tag],
+      is_indoor: TAG_INDOOR_MAP[tag] ?? false,
       event_start_date: eventStartDate,
       event_end_date: eventEndDate,
       synced_at: syncStartedAt,
@@ -63,6 +92,19 @@ async function syncRegion(regionCode) {
     console.warn(`[sync_pois] ${regionCode}: 매핑된 POI가 0건입니다.`);
     return;
   }
+
+  // name_en/name_zh — 배치 동기화 시 1회 생성(런타임 번역 아님, PRD 8장). name(한국어)은 절대
+  // 덮어쓰지 않는다 — 아래는 새 컬럼만 채우는 것이고 raw.title을 그대로 옮긴 name은 위에서 이미 확정.
+  let translated = 0;
+  let translateFailed = 0;
+  await mapWithConcurrency(rows, TRANSLATE_CONCURRENCY, async (row) => {
+    const { en, zh } = await translateName(row.name, 'poi');
+    row.name_en = en;
+    row.name_zh = zh;
+    if (en || zh) translated += 1;
+    else translateFailed += 1;
+  });
+  console.log(`[sync_pois] ${regionCode}: name_en/name_zh 생성 ${translated}건 성공, ${translateFailed}건 실패(null 유지)`);
 
   // content_id 기준 upsert (라운드2 점검 #4) — id(uuid)가 재동기화 후에도 유지된다. 예전 delete+insert
   // 방식은 매번 새 uuid를 발급해서, itinerary_json 스냅샷의 옛 poi_id로 매니징 에이전트가 pois를
