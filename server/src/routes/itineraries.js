@@ -12,7 +12,7 @@ const {
   addDaysToDateString,
   toCandidateShape,
 } = require('../lib/scoring');
-const { extractPreferenceWeights, extractStopWeights, generateNarrationBundle, generateCandidateBlurbs } = require('../lib/llm');
+const { extractPreferenceWeights, extractStopWeights, generateNarrationBundle, generateCandidateBlurbs, emptyLocalized } = require('../lib/llm');
 const { selectRegionsForAuto, assignRegionsToDayBlocks } = require('../lib/regionSelect');
 const { fillTravelFromPrev, fillTravelBetweenDays } = require('../lib/travel');
 const { twoOptOptimize } = require('../lib/geo');
@@ -125,16 +125,12 @@ router.post('/generate', async (req, res, next) => {
       throw apiError(404, 'NO_CANDIDATE', '조건에 맞는 POI 후보가 없습니다.');
     }
 
-    // 코스 요약 + 지역 선택 이유 + 스탑별 한 줄 설명을 한 번의 LLM 호출로 받는다 (라운드5 【4】).
-    const { narration, regionReason, blurbsByPoiId } = await generateNarrationBundle({
-      days,
-      isAutoRegion,
-      regionCodes: finalRegionCodes,
-    });
-    days = days.map((d) => ({
-      ...d,
-      stops: d.stops.map((s) => ({ ...s, blurb: blurbsByPoiId.get(s.poi_id) || null })),
-    }));
+    // 라운드6 【1】(PM 결정) — narration/region_reason/blurb 생성을 이 엔드포인트에서 완전히
+    // 제거했다. 실측(HANDOFF_LOG.md 라운드5)상 코스 뼈대는 ~1.8초인데 LLM 설명 생성만 5~8초를
+    // 더해 3초 예산을 지킬 수 없었다. 스키마는 그대로 두고(필드를 없애지 않음) 항상 null로 채워
+    // 반환한다 — 프론트가 이미 갖고 있는 null 처리 경로가 그대로 쓰인다. 설명은 프론트가 이어서
+    // `POST /api/itineraries/narrate`를 호출해 채운다.
+    days = days.map((d) => ({ ...d, stops: d.stops.map((s) => ({ ...s, blurb: null })) }));
 
     // 카카오모빌리티로 스탑 간/시군 간 실제 이동시간을 채운다 (라운드5 【7】, 시간 부족 시 1순위 컷 대상).
     // 날짜별 스탑 채움은 서로 독립적이라 병렬로 처리한다(순차 await는 3초 예산을 크게 넘겼음 — 실측 로그 참고).
@@ -144,10 +140,51 @@ router.post('/generate', async (req, res, next) => {
 
     res.status(200).json({
       data: {
-        itinerary_json: { days, narration, region_reason: regionReason },
+        itinerary_json: { days, narration: emptyLocalized(), region_reason: null },
         selected_regions: { auto: isAutoRegion, region_codes: finalRegionCodes },
         preference_weights: weights,
         generated_at: new Date().toISOString(),
+      },
+      error: null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/itineraries/narrate — 설명 채우기, 게스트 가능 (신규, 라운드6 【1】, API_CONTRACT.md §1)
+// `/generate`가 뼈대만 돌려준 뒤 프론트가 이어서 호출한다. 좌표/이동시간/is_indoor는 요청에
+// 오지 않는다(프롬프트에 불필요한 값은 애초에 안 받음). 실패해도 항상 200 + null (에러 코드 없음).
+router.post('/narrate', async (req, res, next) => {
+  try {
+    const { lang, selected_regions: selectedRegions, days } = req.body;
+
+    if (!validLang(lang)) {
+      throw apiError(400, 'INVALID_LANG', 'lang은 ko/en/zh만 지원합니다.');
+    }
+    if (
+      !Array.isArray(days) ||
+      !selectedRegions ||
+      typeof selectedRegions.auto !== 'boolean' ||
+      !Array.isArray(selectedRegions.region_codes)
+    ) {
+      throw apiError(400, 'INVALID_STRUCTURED_INPUT', 'days/selected_regions는 필수입니다.');
+    }
+
+    // generateNarrationBundle 내부에서 narration/blurb 각 호출이 실패해도 예외를 던지지 않고
+    // null/빈 값으로 폴백하므로(라운드5에서 이미 보장), 여기서 별도 try/catch로 감쌀 필요가 없다 —
+    // 이 라우트가 던질 수 있는 예외는 위 입력 검증 실패뿐이다.
+    const { narration, regionReason, blurbsByPoiId } = await generateNarrationBundle({
+      days,
+      isAutoRegion: selectedRegions.auto,
+      regionCodes: selectedRegions.region_codes,
+    });
+
+    res.status(200).json({
+      data: {
+        narration,
+        region_reason: regionReason,
+        blurbs: [...blurbsByPoiId.entries()].map(([poiId, b]) => ({ poi_id: poiId, ...b })),
       },
       error: null,
     });

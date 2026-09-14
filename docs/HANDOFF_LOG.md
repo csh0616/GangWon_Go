@@ -2511,3 +2511,183 @@ narration/blurb ≈ 5~8초   ← 이것만 예산을 깬다
   - **프론트**: `/generate` → 즉시 렌더 → `narrate` 이어서 호출 → `poi_id` 매칭해 채우기.
   - **다음 순서는 통합입니다** — 백엔드/프론트 라운드가 끝나면 `NEXT_PUBLIC_API_BASE_URL`을
     실제 서버로 돌리고 end-to-end를 봅니다. 9/21까지 6일 남았습니다.
+
+---
+
+## [2026-09-15 09:00] 백엔드팀 — 라운드6 【2】【3】병·의원 데이터셋 추가 + 마이그레이션 후 재동기화 확인
+
+### 【2】 전국 병·의원 찾기 서비스 추가
+
+`B552657/HsptlAsembySearchService`의 정확한 오퍼레이션은 `getHsptlMdcncListInfoInqire`(실측
+확인). **응급의료기관과 달리 이 오퍼레이션은 `Q0`(시도)/`Q1`(시군구) 지역 필터가 실제로
+동작한다** — 무필터 `totalCount=78,954` → `Q0=강원특별자치도`+`Q1=인제군` `totalCount=29`로
+실측 확인. 그래서 응급의료기관/보건기관표준데이터와 달리 전량을 받지 않고 시군별로 직접
+필터링해서 받는다(`care_sources.js`의 `fetchHospitalsAndClinics(sggName)`).
+
+**category 매핑**: 응답의 `dutyDivNam`(치과의원/보건소/의원/한의원/병원/종합병원/요양병원/
+기타(구급차) 등, 전부 실측 확인)을 아래로 매핑했다.
+- `보건소` 포함 → `health_center` (계약 기존 enum 재사용 — 이 데이터셋은 보건소/보건지소/
+  보건진료소를 세분화하지 않고 전부 "보건소"로만 주므로 `health_subcenter`는 이 소스에서는
+  안 씀)
+- `병원` 포함 → `hospital` (병원/종합병원/요양병원 — 계약 기존 enum 재사용)
+- `의원` 포함 → **`clinic` (신규)** — 의원/치과의원/한의원. **계약에 없는 새 category 값이라
+  API_CONTRACT.md §4 갱신 제안으로 남긴다.** `care_facilities.category`는 실제로는 DB enum이
+  아니라 plain text 컬럼(0001 스키마 확인)이라 **마이그레이션 0006은 필요 없었다** — 값
+  자체는 이미 자유롭게 들어간다, 계약 문서 쪽만 동기화가 필요하다.
+- `기타(구급차)` 등 위 세 패턴에 안 걸리는 항목은 **제외**(구급차 회사 등 실제로 찾아갈 수 있는
+  의료기관이 아님 — 건수를 채우려고 애매한 항목까지 넣지 않는다는 원칙 그대로).
+
+**name_en/name_zh**: 기존 `translate_name.js`/`CARE_SUFFIX_DICT` 파이프라인 그대로 재사용.
+접미사 사전에 `의원`(Clinic)/`한의원`(Korean Medicine Clinic)/`치과의원`(Dental Clinic)/
+`종합병원`(General Hospital) 추가(긴 접미사부터 매칭되도록 정렬은 기존 코드가 자동 처리).
+
+**정리**: 전국보건기관표준데이터(강원 0건 확정, PRD 5장에서 폐기)를 쓰던
+`fetchAllHealthInstitutions`/지오코딩 경유 로직을 코드에서 제거했다 — `care_sources.js`에서
+함수 삭제, 더 이상 쓰이지 않는 `geocode.js`도 삭제(카카오 로컬 지오코딩은 새 소스가 좌표를
+직접 주므로 불필요해짐).
+
+### 실측 결과 — 시군당 최소 1건 이상 달성, 0건 시군 없음
+
+| 시군 | 응급의료기관 | 병·의원(의원/한의원/치과의원/병원/보건소) | 합계 |
+|---|---|---|---|
+| 인제 | 0 | 29 | 29 |
+| 홍천 | 1 | 83 | 84 |
+| 평창 | 1 | 56 | 57 |
+| **합계** | **2** | **168** | **170** |
+
+**인제 0건 문제가 해결됐다** — 응급의료기관은 여전히 0건이지만 병·의원 29건(치과의원7/
+보건소11/의원4/한의원6/병원1)으로 케어 화면이 더 이상 비지 않는다. PRD 8장 "시군마다 실재가
+확인된 시설 1건 이상" 기준을 세 시군 전부 충족.
+
+### 【3】 마이그레이션 0004/0005 적용 후 재동기화 확인 (실 DB 반영, 수치로 확인)
+
+- `sync_care.js` 재실행 → **170건 upsert 성공**(이전 라운드엔 `name_ko` 컬럼 없음 에러로 upsert
+  자체가 안 됐었다). 지역별 정리(cleanup)까지 정상 동작 확인.
+- `sync_pois.js` 재실행 → **482/482건 번역 성공, upsert 성공**. DB 직접 조회로 재확인:
+  `pois` 전체 482건 중 `name_en` 채워짐 482건(100%), `is_indoor=true` 351건 — 컬럼이 실제로
+  채워져 있음을 애플리케이션 로그가 아니라 **DB select로 직접 검증**했다.
+- `GET /api/care?region_code=injae` 실호출 → API_CONTRACT.md §4 스키마 그대로 응답 확인
+  (`name_ko` 주 표시값 + `name_en`/`name_zh` 병기, `category` 값이 `clinic`/`hospital`/
+  `health_center`/`emergency_room`로 정상 분류돼 나옴).
+
+**알려진 품질 이슈(참고용, 이번 라운드 범위 밖)**: LLM 번역 결과 중 일부가 로마자·한글·키릴
+문자가 섞이는 등 품질이 들쭉날쭉한 사례를 발견했다(예: "약손한의원" → `name_en`에 키릴 문자가
+섞여 나옴, "국립평창청소년수련원" → 로마자 표기가 어색함). 접미사는 고정 사전이라 항상
+일관되지만, LLM이 맡는 지명 부분은 검증 로직이 없어 가끔 이런 사례가 나온다. 안전 기능인
+`care_facilities`보다는 `pois`(관광 안내용, 병행 표기로 한국어 원문이 항상 같이 보임)에서
+상대적으로 리스크가 낮다고 판단해 이번 라운드에서 손대지 않았다 — 데모 전 QA가 육안으로
+전체 목록을 한 번 훑어보는 것을 권장.
+
+- 블로커: 없음.
+- 다음 액션: 승현님/PM — `clinic` category 신규 값을 API_CONTRACT.md §4에 반영.
+
+---
+
+## [2026-09-15 09:40] 백엔드팀 — 라운드6 【1】narrate 엔드포인트 분리 완료, 3초 예산 달성
+
+계약(API_CONTRACT.md §1)에 이미 반영된 대로 구현. `llm.js`의 `generateNarrationBundle`(라운드5
+병렬 청크 구조)은 로직 변경 없이 그대로 옮기고, 입력 형식만 `/narrate` 요청 와이어 포맷
+(`{poi_id, name_ko, category}`)에 맞춰 조정했다.
+
+- `POST /api/itineraries/generate` — LLM narration 호출을 완전히 제거. `narration`/
+  `region_reason`/모든 `stops[].blurb`를 항상 `null`로 채워 반환(스키마는 그대로 유지).
+  `extractPreferenceWeights`(가중치 추출)는 그대로 남음.
+- `POST /api/itineraries/narrate` (신규, 인증 불필요) — 요청받은 `days[].stops[]`(장소명·
+  카테고리·시군만)로 narration/region_reason/blurbs를 생성해 항상 200으로 반환. 입력 구조
+  검증 실패(400 계열)를 제외하면 LLM 실패는 절대 에러 코드로 새지 않는다
+  (`generateNarrationBundle` 내부에서 이미 전부 null 폴백 보장 — 라운드5부터 확인된 동작).
+  `selected_regions.auto===false`면 `region_reason`은 `null` — 라이브 확인.
+
+### 실측 — 3초 판정 (5회 반복, 로컬 → 실 Supabase/Claude/카카오모빌리티)
+
+**`/generate` 3일/9스탑 (단일 시군, pyeongchang)**
+
+| 회차 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 응답시간(초) | 2.44 | 1.67 | 1.66 | 1.86 | 1.69 |
+
+**`/generate` 4일/20스탑 (다중 시군, "어디든지")**
+
+| 회차 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 응답시간(초) | 2.07 | 2.08 | 1.70 | 2.61 | 1.96 |
+
+**전부 3초 이내 — 판정 통과.** 라운드5의 15.2초(분리 전) → 6~9초대(1차 최적화) → **1.7~2.6초
+(분리 후)**. `narration`/`region_reason`/`blurb`가 스키마 그대로 `null`로 오는 것도 라이브
+확인했다.
+
+**`narrate` 단독 응답시간(참고용, 예산 대상 아님)** — 위 4일/20스탑 코스의 `days`를 그대로 넘겨
+5회 반복: **4.56 / 4.68 / 4.89 / 4.96 / 5.56초.** 계약의 "10초 타임아웃" 기준 안에 여유 있게
+들어온다. 20개 스탑 전부 `poi_id` 매칭되는 blurb를 받았고, `narration`/`region_reason`도
+정상 생성됐다(라이브 응답 본문으로 확인).
+
+- 블로커: **없음. 3초 예산 문제가 해결됐다.**
+- 다음 액션: 프론트 — `/generate` 즉시 렌더 → `narrate` 이어서 호출 → `poi_id` 매칭 플로우
+  통합.
+
+---
+
+## [2026-09-15 10:10] 백엔드팀 — 라운드6 【4】통합 준비
+
+### CORS — Vercel 도메인 아직 없음
+
+`server/.env`의 `ALLOWED_ORIGINS`를 확인했다. **현재 로컬 주소 1개만 등록돼 있고 Vercel
+배포 도메인은 없다.** 승현님이 Vercel 도메인을 알려주시면 콤마로 이어붙여서
+(`http://localhost:3000,https://<실제도메인>.vercel.app`) 추가해야 한다 — 안 그러면 배포된
+프론트에서 API 호출이 전부 CORS로 막힌다.
+
+### 배포 필요 환경변수 (키 이름만, 값 없음)
+
+**API 서버 (`/server`, Express — Railway/Render에 상시 서비스로 배포)**
+
+| 키 | 용도 |
+|---|---|
+| `PORT` | 서버 포트 (플랫폼이 자동 주입하는 경우 그대로 써도 됨) |
+| `SUPABASE_URL` | Supabase 프로젝트 URL |
+| `SUPABASE_ANON_KEY` | 사용자 Bearer 토큰 검증용 |
+| `SUPABASE_SERVICE_ROLE_KEY` | RLS 우회 트러스티드 서버 키 — **절대 프론트/클라이언트 노출 금지** |
+| `ANTHROPIC_API_KEY` | 가중치 추출·narrate LLM 호출 |
+| `KAKAO_MOBILITY_API_KEY` | Directions API(이동시간) — 없으면 `travel_from_prev(_day)`가 전부 null로 폴백(에러는 안 남) |
+| `KMA_SERVICE_KEY` | 이 라운드엔 직접 안 쓰지만 `agent/`와 서비스키 관례를 공유 — 서버 쪽엔 필수 아님 |
+| `ALLOWED_ORIGINS` | 위 CORS 항목 참고 |
+
+**감시 에이전트 (`/agent`, node-cron — API 서버와 별도 프로세스/서비스로 배포 필요)**
+
+| 키 | 용도 |
+|---|---|
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | API 서버와 동일 값, `agent/`가 `server/src/lib`를 상대경로로 직접 import해서 쓰기 때문에 이 프로세스에도 각자 필요(1주차부터의 구조) |
+| `KAKAO_MOBILITY_API_KEY` | traffic 조건(구간 이동시간) 판정 |
+| `KMA_SERVICE_KEY` | rain 조건(기상청 단기예보) 판정 |
+
+`ANTHROPIC_API_KEY`는 `agent/`엔 필요 없다(narration을 만들지 않음, `alertTrigger.js`가 LLM을
+안 씀). **두 프로세스는 상시 실행이 필요하므로(API 서버는 요청 대기, 에이전트는 cron 루프)
+Railway/Render에서 별도 서비스 2개로 배포해야 한다** — 하나로 합쳐서 배포할 수 없다(node-cron이
+API 서버 프로세스 안에서 안 돈다, `agent/src/index.js` 별도 진입점).
+
+### 엔드포인트 스모크 테스트 — 전부 통과
+
+실제 Supabase 테스트 유저(임시 생성 후 완전 삭제·정리 완료)로 인증 필요 엔드포인트까지
+전부 실호출했다.
+
+| 엔드포인트 | 결과 |
+|---|---|
+| `POST /api/itineraries/generate` | 200, 3초 이내 (위 【1】) |
+| `POST /api/itineraries/narrate` | 200 |
+| `POST /api/itineraries` (저장) | 201 |
+| `GET /api/itineraries` (목록) | 200, `stop_count` 정상 |
+| `GET /api/itineraries/:id` | 200 |
+| `PATCH /api/itineraries/:id` | 200, `day_reordered:true`, 순서 재정렬 확인 |
+| `DELETE /api/itineraries/:id` | 200, 재호출 멱등 확인, 목록에서 제외 확인 |
+| `GET /api/care?region_code=...` | 200, §4 스키마 그대로 |
+| `POST /api/itineraries/regenerate-stop` | 200, 후보 3개 + blurb |
+| `POST /api/alerts/trigger` | 200, 메시지 완성 문장(ko/en/zh) 확인 |
+| `POST /api/alerts/:id/respond` | 200, 스탑 교체 반영 확인 |
+
+**실패한 것 없음.** 테스트에 쓴 임시 유저/일정/알림 row는 전부 삭제해 실 데이터에 남기지
+않았다(Supabase Auth 유저 삭제만으로는 `public.users`/`itineraries`가 안 따라 지워진다는 것도
+이번에 확인함 — `users.id`는 `auth.users`를 진짜 FK로 참조하지 않는 구조라서다. 나중에 QA가
+같은 방식으로 테스트 데이터를 만들 경우 수동 정리가 필요하다는 점 기록해둔다).
+
+- 블로커: 없음(CORS는 승현님 액션 대기이지 백엔드 블로커 아님).
+- 다음 액션: 승현님 — Vercel 도메인 공유(ALLOWED_ORIGINS 갱신) + API 서버/에이전트 각각
+  Railway 또는 Render에 별도 서비스로 배포 + 위 환경변수 등록.

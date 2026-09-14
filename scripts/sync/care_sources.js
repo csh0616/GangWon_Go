@@ -1,12 +1,13 @@
-// 여행 케어 안내 데이터 소스 2종 (라운드5 【2】, PRD 5장/8장) — MdclTursmService(의료관광 인증
-// 시설)는 인제/홍천/평창 전부 0건이라 아래 두 개로 교체했다. 둘 다 공공데이터포털 공유 서비스키를
-// 그대로 쓴다(TOURAPI_SERVICE_KEY와 동일 계정 키, 라운드3에서 확인된 관례).
+// 여행 케어 안내 데이터 소스 (PRD 5장/8장) — MdclTursmService(의료관광 인증 시설)는 인제/홍천/
+// 평창 전부 0건이라 폐기, 전국보건기관표준데이터는 강원이 데이터셋에 통째로 없어 라운드6에서
+// 폐기(PRD 5장). 셋 다 공공데이터포털 공유 서비스키를 그대로 쓴다(TOURAPI_SERVICE_KEY와 동일
+// 계정 키, 라운드3에서 확인된 관례).
 require('dotenv').config();
 
 const SERVICE_KEY = process.env.TOURAPI_SERVICE_KEY;
 
 const EMERGENCY_BASE_URL = 'https://apis.data.go.kr/B552657/ErmctInfoInqireService';
-const HEALTH_INST_BASE_URL = 'https://api.data.go.kr/openapi/tn_pubr_public_ht_inst_api';
+const HOSPITAL_BASE_URL = 'https://apis.data.go.kr/B552657/HsptlAsembySearchService';
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
@@ -38,21 +39,29 @@ async function fetchAllEmergencyFacilities() {
 }
 
 /**
- * 전국보건기관표준데이터 — sync_festivals.js와 동일 패턴(type=json, body.items.item[]).
- * `sggNm`(시군구명) 필드로 정확히 필터 가능 — 주소 문자열 부분일치보다 안전하다.
- * 좌표 필드가 없어(주소만 제공) 호출부(sync_care.js)가 Kakao 로컬 API로 지오코딩한다.
+ * 국립중앙의료원 전국 병·의원 찾기 서비스(라운드6 【2】, PRD 8장) — 응급의료기관만으로는 시군당
+ * 0~1건이라 추가. `getHsptlMdcncListInfoInqire`가 정확한 오퍼레이션(실측 확인). ErmctInfoInqireService와
+ * 달리 **`Q0`(시도)/`Q1`(시군구) 파라미터가 실제로 동작한다**(실측: 무필터 totalCount=78,954 →
+ * Q0=강원특별자치도+Q1=인제군 totalCount=29) — 그래서 시군별로 직접 필터링해서 받는다(전량을
+ * 받을 필요 없음, 응급의료기관/보건기관표준데이터와는 다른 패턴).
  */
-async function fetchAllHealthInstitutions() {
+async function fetchHospitalsAndClinics(sggName) {
   if (!SERVICE_KEY) throw new Error('TOURAPI_SERVICE_KEY가 설정되지 않았습니다 (.env 확인).');
   const all = [];
   for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo += 1) {
-    const query = new URLSearchParams({ pageNo: String(pageNo), numOfRows: String(PAGE_SIZE), type: 'json' });
+    const query = new URLSearchParams({
+      pageNo: String(pageNo),
+      numOfRows: String(PAGE_SIZE),
+      _type: 'json',
+      Q0: '강원특별자치도',
+      Q1: sggName,
+    });
     // eslint-disable-next-line no-await-in-loop
-    const res = await fetch(`${HEALTH_INST_BASE_URL}?serviceKey=${SERVICE_KEY}&${query.toString()}`);
-    if (!res.ok) throw new Error(`전국보건기관표준데이터 API 호출 실패: HTTP ${res.status}`);
+    const res = await fetch(`${HOSPITAL_BASE_URL}/getHsptlMdcncListInfoInqire?serviceKey=${SERVICE_KEY}&${query.toString()}`);
+    if (!res.ok) throw new Error(`병·의원 찾기 API 호출 실패: HTTP ${res.status}`);
     // eslint-disable-next-line no-await-in-loop
     const json = await res.json();
-    const body = json?.body;
+    const body = json?.response?.body;
     const items = body?.items?.item;
     const list = items ? (Array.isArray(items) ? items : [items]) : [];
     all.push(...list);
@@ -61,4 +70,4 @@ async function fetchAllHealthInstitutions() {
   return all;
 }
 
-module.exports = { fetchAllEmergencyFacilities, fetchAllHealthInstitutions };
+module.exports = { fetchAllEmergencyFacilities, fetchHospitalsAndClinics };

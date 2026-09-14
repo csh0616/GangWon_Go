@@ -195,14 +195,19 @@ function chunk(array, size) {
  * 나머지 청크와 narration은 정상 반환된다 — 계약이 가정한 "전부 성공/전부 null"보다 나은 부분
  * 성능저하이므로 안전한 방향의 변경이지만, 계약 문구와 다르다는 점은 HANDOFF_LOG에 남긴다.
  *
+ * 라운드6 【1】 — `/generate`에서 분리돼 `POST /api/itineraries/narrate` 전용이 됐다. 그래서
+ * `days[].stops[]`도 그 엔드포인트의 요청 와이어 포맷(`{poi_id, name_ko, category}`)을 그대로
+ * 받는다 — `/generate`가 반환하는 `{name:{ko,en,zh}}` 객체가 아니다(계약상 narrate 요청에는
+ * 좌표/이동시간/is_indoor를 안 보내는 것과 같은 이유로 name도 한국어 하나만 온다).
+ *
  * @param {object} params
- * @param {Array} params.days - buildItineraryDays() 결과 (day/date/region_code/stops[])
+ * @param {Array} params.days - [{day, region_code, stops:[{poi_id, name_ko, category}]}]
  * @param {boolean} params.isAutoRegion - "어디든지"로 서버가 지역을 골랐는지 (3.5절 2.4단계)
  * @param {string[]} params.regionCodes - 최종적으로 쓰인 시군 목록
  * @returns {Promise<{narration: object, regionReason: object|null, blurbsByPoiId: Map}>}
  */
 async function generateNarrationBundle({ days, isAutoRegion, regionCodes }) {
-  const allStops = days.flatMap((d) => d.stops.map((s) => ({ day: d.day, poi_id: s.poi_id, name: s.name.ko, category: s.category })));
+  const allStops = days.flatMap((d) => d.stops.map((s) => ({ day: d.day, poi_id: s.poi_id, name: s.name_ko, category: s.category })));
 
   if (allStops.length === 0) {
     return { narration: emptyLocalized(), regionReason: null, blurbsByPoiId: new Map() };
@@ -300,4 +305,4 @@ async function generateCandidateBlurbs(candidates) {
   }
 }
 
-module.exports = { extractPreferenceWeights, extractStopWeights, generateNarrationBundle, generateCandidateBlurbs };
+module.exports = { extractPreferenceWeights, extractStopWeights, generateNarrationBundle, generateCandidateBlurbs, emptyLocalized };

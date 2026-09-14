@@ -34,14 +34,21 @@ const POI_SUFFIX_DICT = {
   항: { en: 'Port', zh: '港' },
 };
 
-// PRD 8장 "care_facilities 데이터 소스 교체" 상자 — 시설 종류 접미사 고정 사전
+// PRD 8장 "care_facilities 데이터 소스 교체" 상자 — 시설 종류 접미사 고정 사전.
+// 라운드6 【2】 — 전국 병·의원 찾기 서비스(dutyDivNam) 추가하며 의원/한의원/치과의원/종합병원 보강.
+// 긴 접미사가 먼저 매칭되도록(stripKnownSuffix가 길이순 정렬) "종합병원"을 "병원"보다,
+// "한의원"/"치과의원"을 "의원"보다 먼저 넣을 필요는 없다 — 정렬은 코드가 알아서 한다.
 const CARE_SUFFIX_DICT = {
   보건의료원: { en: 'Health & Medical Center', zh: '保健医疗院' },
   보건지소: { en: 'Health Subcenter', zh: '保健支所' },
   보건진료소: { en: 'Health Clinic', zh: '保健诊疗所' },
   보건소: { en: 'Health Center', zh: '保健所' },
   의료원: { en: 'Medical Center', zh: '医疗院' },
+  종합병원: { en: 'General Hospital', zh: '综合医院' },
   병원: { en: 'Hospital', zh: '医院' },
+  치과의원: { en: 'Dental Clinic', zh: '牙科诊所' },
+  한의원: { en: 'Korean Medicine Clinic', zh: '韩医诊所' },
+  의원: { en: 'Clinic', zh: '诊所' },
 };
 
 const NAME_TOOL = {
