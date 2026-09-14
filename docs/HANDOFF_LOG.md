@@ -2580,3 +2580,47 @@ narration/blurb ≈ 5~8초   ← 이것만 예산을 깬다
 
 - 블로커: 없음.
 - 다음 액션: 승현님/PM — `clinic` category 신규 값을 API_CONTRACT.md §4에 반영.
+
+---
+
+## [2026-09-15 09:40] 백엔드팀 — 라운드6 【1】narrate 엔드포인트 분리 완료, 3초 예산 달성
+
+계약(API_CONTRACT.md §1)에 이미 반영된 대로 구현. `llm.js`의 `generateNarrationBundle`(라운드5
+병렬 청크 구조)은 로직 변경 없이 그대로 옮기고, 입력 형식만 `/narrate` 요청 와이어 포맷
+(`{poi_id, name_ko, category}`)에 맞춰 조정했다.
+
+- `POST /api/itineraries/generate` — LLM narration 호출을 완전히 제거. `narration`/
+  `region_reason`/모든 `stops[].blurb`를 항상 `null`로 채워 반환(스키마는 그대로 유지).
+  `extractPreferenceWeights`(가중치 추출)는 그대로 남음.
+- `POST /api/itineraries/narrate` (신규, 인증 불필요) — 요청받은 `days[].stops[]`(장소명·
+  카테고리·시군만)로 narration/region_reason/blurbs를 생성해 항상 200으로 반환. 입력 구조
+  검증 실패(400 계열)를 제외하면 LLM 실패는 절대 에러 코드로 새지 않는다
+  (`generateNarrationBundle` 내부에서 이미 전부 null 폴백 보장 — 라운드5부터 확인된 동작).
+  `selected_regions.auto===false`면 `region_reason`은 `null` — 라이브 확인.
+
+### 실측 — 3초 판정 (5회 반복, 로컬 → 실 Supabase/Claude/카카오모빌리티)
+
+**`/generate` 3일/9스탑 (단일 시군, pyeongchang)**
+
+| 회차 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 응답시간(초) | 2.44 | 1.67 | 1.66 | 1.86 | 1.69 |
+
+**`/generate` 4일/20스탑 (다중 시군, "어디든지")**
+
+| 회차 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 응답시간(초) | 2.07 | 2.08 | 1.70 | 2.61 | 1.96 |
+
+**전부 3초 이내 — 판정 통과.** 라운드5의 15.2초(분리 전) → 6~9초대(1차 최적화) → **1.7~2.6초
+(분리 후)**. `narration`/`region_reason`/`blurb`가 스키마 그대로 `null`로 오는 것도 라이브
+확인했다.
+
+**`narrate` 단독 응답시간(참고용, 예산 대상 아님)** — 위 4일/20스탑 코스의 `days`를 그대로 넘겨
+5회 반복: **4.56 / 4.68 / 4.89 / 4.96 / 5.56초.** 계약의 "10초 타임아웃" 기준 안에 여유 있게
+들어온다. 20개 스탑 전부 `poi_id` 매칭되는 blurb를 받았고, `narration`/`region_reason`도
+정상 생성됐다(라이브 응답 본문으로 확인).
+
+- 블로커: **없음. 3초 예산 문제가 해결됐다.**
+- 다음 액션: 프론트 — `/generate` 즉시 렌더 → `narrate` 이어서 호출 → `poi_id` 매칭 플로우
+  통합.
