@@ -2624,3 +2624,70 @@ narration/blurb ≈ 5~8초   ← 이것만 예산을 깬다
 - 블로커: **없음. 3초 예산 문제가 해결됐다.**
 - 다음 액션: 프론트 — `/generate` 즉시 렌더 → `narrate` 이어서 호출 → `poi_id` 매칭 플로우
   통합.
+
+---
+
+## [2026-09-15 10:10] 백엔드팀 — 라운드6 【4】통합 준비
+
+### CORS — Vercel 도메인 아직 없음
+
+`server/.env`의 `ALLOWED_ORIGINS`를 확인했다. **현재 로컬 주소 1개만 등록돼 있고 Vercel
+배포 도메인은 없다.** 승현님이 Vercel 도메인을 알려주시면 콤마로 이어붙여서
+(`http://localhost:3000,https://<실제도메인>.vercel.app`) 추가해야 한다 — 안 그러면 배포된
+프론트에서 API 호출이 전부 CORS로 막힌다.
+
+### 배포 필요 환경변수 (키 이름만, 값 없음)
+
+**API 서버 (`/server`, Express — Railway/Render에 상시 서비스로 배포)**
+
+| 키 | 용도 |
+|---|---|
+| `PORT` | 서버 포트 (플랫폼이 자동 주입하는 경우 그대로 써도 됨) |
+| `SUPABASE_URL` | Supabase 프로젝트 URL |
+| `SUPABASE_ANON_KEY` | 사용자 Bearer 토큰 검증용 |
+| `SUPABASE_SERVICE_ROLE_KEY` | RLS 우회 트러스티드 서버 키 — **절대 프론트/클라이언트 노출 금지** |
+| `ANTHROPIC_API_KEY` | 가중치 추출·narrate LLM 호출 |
+| `KAKAO_MOBILITY_API_KEY` | Directions API(이동시간) — 없으면 `travel_from_prev(_day)`가 전부 null로 폴백(에러는 안 남) |
+| `KMA_SERVICE_KEY` | 이 라운드엔 직접 안 쓰지만 `agent/`와 서비스키 관례를 공유 — 서버 쪽엔 필수 아님 |
+| `ALLOWED_ORIGINS` | 위 CORS 항목 참고 |
+
+**감시 에이전트 (`/agent`, node-cron — API 서버와 별도 프로세스/서비스로 배포 필요)**
+
+| 키 | 용도 |
+|---|---|
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | API 서버와 동일 값, `agent/`가 `server/src/lib`를 상대경로로 직접 import해서 쓰기 때문에 이 프로세스에도 각자 필요(1주차부터의 구조) |
+| `KAKAO_MOBILITY_API_KEY` | traffic 조건(구간 이동시간) 판정 |
+| `KMA_SERVICE_KEY` | rain 조건(기상청 단기예보) 판정 |
+
+`ANTHROPIC_API_KEY`는 `agent/`엔 필요 없다(narration을 만들지 않음, `alertTrigger.js`가 LLM을
+안 씀). **두 프로세스는 상시 실행이 필요하므로(API 서버는 요청 대기, 에이전트는 cron 루프)
+Railway/Render에서 별도 서비스 2개로 배포해야 한다** — 하나로 합쳐서 배포할 수 없다(node-cron이
+API 서버 프로세스 안에서 안 돈다, `agent/src/index.js` 별도 진입점).
+
+### 엔드포인트 스모크 테스트 — 전부 통과
+
+실제 Supabase 테스트 유저(임시 생성 후 완전 삭제·정리 완료)로 인증 필요 엔드포인트까지
+전부 실호출했다.
+
+| 엔드포인트 | 결과 |
+|---|---|
+| `POST /api/itineraries/generate` | 200, 3초 이내 (위 【1】) |
+| `POST /api/itineraries/narrate` | 200 |
+| `POST /api/itineraries` (저장) | 201 |
+| `GET /api/itineraries` (목록) | 200, `stop_count` 정상 |
+| `GET /api/itineraries/:id` | 200 |
+| `PATCH /api/itineraries/:id` | 200, `day_reordered:true`, 순서 재정렬 확인 |
+| `DELETE /api/itineraries/:id` | 200, 재호출 멱등 확인, 목록에서 제외 확인 |
+| `GET /api/care?region_code=...` | 200, §4 스키마 그대로 |
+| `POST /api/itineraries/regenerate-stop` | 200, 후보 3개 + blurb |
+| `POST /api/alerts/trigger` | 200, 메시지 완성 문장(ko/en/zh) 확인 |
+| `POST /api/alerts/:id/respond` | 200, 스탑 교체 반영 확인 |
+
+**실패한 것 없음.** 테스트에 쓴 임시 유저/일정/알림 row는 전부 삭제해 실 데이터에 남기지
+않았다(Supabase Auth 유저 삭제만으로는 `public.users`/`itineraries`가 안 따라 지워진다는 것도
+이번에 확인함 — `users.id`는 `auth.users`를 진짜 FK로 참조하지 않는 구조라서다. 나중에 QA가
+같은 방식으로 테스트 데이터를 만들 경우 수동 정리가 필요하다는 점 기록해둔다).
+
+- 블로커: 없음(CORS는 승현님 액션 대기이지 백엔드 블로커 아님).
+- 다음 액션: 승현님 — Vercel 도메인 공유(ALLOWED_ORIGINS 갱신) + API 서버/에이전트 각각
+  Railway 또는 Render에 별도 서비스로 배포 + 위 환경변수 등록.
