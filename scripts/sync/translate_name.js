@@ -66,6 +66,19 @@ const NAME_TOOL = {
   cache_control: { type: 'ephemeral' },
 };
 
+// P0-2 (2026-09-15 PM 반영) — LLM이 지명을 번역하다가 키릴 문자 등 엉뚱한 문자를 섞는 사례가
+// 실측으로 확인됐다("약손한의원" → name_en에 키릴 문자 혼입). 접미사는 고정 사전이라 항상
+// 안전하지만 지명(remainder) 부분은 검증이 없었다. 최종 합성 문자열을 문자 클래스로 검사해
+// 통과 못 하면 그 언어만 null로 떨어뜨린다 — 사람이 652건을 육안 검수하는 건 비현실적이라
+// 기계적으로 막는다(API_CONTRACT.md §4).
+const EN_ALLOWED = /^[A-Za-z0-9 '.\-()]*$/; // ASCII 문자·숫자·공백·하이픈·아포스트로피·마침표·괄호만
+const ZH_ALLOWED = /^[一-鿿0-9 ()]*$/; // CJK 한자 + ASCII 숫자/공백/괄호만 (한글·키릴 등은 자동 탈락)
+
+function isAllowedChars(text, lang) {
+  const pattern = lang === 'zh' ? ZH_ALLOWED : EN_ALLOWED;
+  return pattern.test(text);
+}
+
 function stripKnownSuffix(name, suffixDict) {
   const matched = Object.keys(suffixDict)
     .filter((suf) => name.endsWith(suf))
@@ -118,7 +131,13 @@ async function translateName(nameKo, kind) {
     const parts = [translated[lang], suffix ? suffixDict[suffix][lang] : null].filter(Boolean);
     // 중국어는 띄어쓰기 없이 붙여쓴다(月精 + 寺 → 月精寺), 영어는 공백으로 구분
     const separator = lang === 'zh' ? '' : ' ';
-    result[lang] = parts.length > 0 ? parts.join(separator).trim() : null;
+    const joined = parts.length > 0 ? parts.join(separator).trim() : null;
+    if (joined && !isAllowedChars(joined, lang)) {
+      console.warn(`[translate_name] "${nameKo}" → ${lang} 결과에 허용되지 않은 문자 포함, null 처리: "${joined}"`);
+      result[lang] = null;
+    } else {
+      result[lang] = joined;
+    }
   }
   return result;
 }
