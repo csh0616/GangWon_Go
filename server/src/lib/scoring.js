@@ -31,6 +31,45 @@ function sanitizeStoredDays(days) {
 // 스코어를 1차 기준으로 유지하면서 근접도로 동점/근소차를 가르는 정도의 값 (1주차 점검 #13).
 const ANCHOR_DISTANCE_PENALTY_WEIGHT = 0.3;
 
+// P0(라운드8) — free_text가 비면 가중치가 전부 0이라 scorePoi가 전 POI에 0점을 주고, 이후
+// .sort((a,b) => b.__score - a.__score)는 동점일 때 입력 순서(=DB 조회 순서=TourAPI가 준
+// 가나다순)를 그대로 보존한다. 배포본 실측에서 "청춘카페 → 청춘보리밥 → 청산회관 → ..." 가나다순
+// 식당 퍼레이드로 나타났다(API_CONTRACT.md §1 "가중치가 전부 0일 때" 상자). poi_id를 해시해
+// 이름·삽입 순서와 무관한 결정적 값으로 동점을 가른다 — 난수는 쓰지 않는다(새로고침마다 코스가
+// 바뀌면 신뢰를 잃는다는 계약 원칙 그대로).
+function stableTieBreakKey(poiId) {
+  let hash = 0;
+  const id = String(poiId);
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0; // 32비트 오버플로는 그대로 감싸돈다 — 결정적이면 충분
+  }
+  return hash;
+}
+
+// 점수 내림차순, 동점이면 stableTieBreakKey 내림차순. field는 '__score' 또는 '__combined'
+// (앵커 주변 거리 가중 점수, 아래 buildItineraryDays 참고) 둘 다에 재사용한다.
+function compareByField(field) {
+  return (a, b) => b[field] - a[field] || stableTieBreakKey(b.id) - stableTieBreakKey(a.id);
+}
+
+// P0(라운드8) — TourAPI가 같은 위치에 여러 상호를 등록하는 경우가 있다(실측: 청춘카페&떡방 /
+// 청춘보리밥 진부점이 소수점 10자리까지 동일 좌표). 지도 마커가 겹치고 카카오모빌리티가
+// 출발지=도착지 경로를 계산 못 해 travel_from_prev가 null이 된다(§1 상자 3번, 라운드8 P1과
+// 동일 원인). 후보 단계에서 좌표당 하나만 남긴다 — 가중치와 무관하게 항상 적용.
+// 남길 하나를 고르는 기준도 이름 순서와 무관한 stableTieBreakKey로 결정한다(그래야 이 dedupe
+// 자체가 가나다순 편향을 다시 끌어들이지 않는다).
+function dedupeByCoordinate(pois) {
+  const byCoord = new Map();
+  pois.forEach((p) => {
+    const key = `${p.lat},${p.lng}`;
+    const existing = byCoord.get(key);
+    if (!existing || stableTieBreakKey(p.id) > stableTieBreakKey(existing.id)) {
+      byCoord.set(key, p);
+    }
+  });
+  return [...byCoord.values()];
+}
+
 function scorePoi(poi, weights) {
   const tags = poi.tags || [];
   return tags.reduce((sum, tag) => sum + (weights[tag] || 0), 0);
@@ -79,6 +118,84 @@ function festivalOverlapsRange(poi, startDate, endDate) {
   return es <= re && ee >= rs;
 }
 
+// festival_event 후보는 "일자 검사만 통과하면 배치 가능" — 가중치(__score) 조건을 걸면 안 된다
+// (라운드2 점검 #1). free_text 없이 생성하면 가중치가 전부 0이라(API_CONTRACT §1) 예전 코드의
+// `__score > 0` 게이트에 항상 걸려서 개최일이 맞는 축제도 코스에 못 들어갔다. buildItineraryDays와
+// enforceCategoryDiversity(아래, 라운드8) 둘 다 쓰므로 모듈 스코프로 뺐다.
+function isDateEligible(poi, date) {
+  if (!(poi.tags || []).includes('festival_event')) return true;
+  return festivalOverlapsDate(poi, date);
+}
+
+function masterCategoryOf(poi) {
+  return (poi.tags || [])[0] || null;
+}
+
+/**
+ * P0(라운드8) — 하루 스탑의 과반이 같은 카테고리가 되지 않게 후처리한다. 가중치가 이미
+ * 다양성을 만들어주지만, 가중치가 전부 0이거나 한쪽으로 쏠리면 클러스터링 결과가 한 카테고리로
+ * 몰릴 수 있다(§1 "가중치가 전부 0일 때" 상자 2번). 기존 스코어링/클러스터링 로직은 건드리지
+ * 않고, 각 날짜의 최종 picked(+anchor)만 놓고 과반 카테고리의 최저점 항목을 다른 카테고리의
+ * 미사용 후보로 교체한다. 대체할 후보가 없으면(그 시군에 다른 카테고리 후보 자체가 부족한 경우)
+ * 제약을 완화하고 로그만 남긴다 — 코스 생성이 이것 때문에 실패해서는 안 된다.
+ * @param {Array} dayPlans - {date, anchor, picked, slots} 배열, buildItineraryDays 내부에서 in-place 수정
+ * @param {Array} scored - __score가 계산된 전체 후보 풀(이미 festival 날짜 필터 적용됨)
+ */
+function enforceCategoryDiversity(dayPlans, scored) {
+  const usedIds = new Set();
+  dayPlans.forEach((dp) => {
+    if (dp.anchor) usedIds.add(dp.anchor.id);
+    dp.picked.forEach((p) => usedIds.add(p.id));
+  });
+
+  dayPlans.forEach((dp) => {
+    const stops = dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked;
+    const n = stops.length;
+    if (n === 0) return;
+
+    const byCategory = new Map();
+    stops.forEach((p) => {
+      const cat = masterCategoryOf(p);
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(p);
+    });
+
+    const maxAllowed = Math.floor(n / 2); // 이 값을 넘으면(=count*2 > n) 과반
+    byCategory.forEach((group, cat) => {
+      if (cat === null || group.length <= maxAllowed) return;
+      const excess = group.length - maxAllowed;
+      // 낮은 점수부터 교체 대상으로 삼는다(좋은 픽은 남기고 "채우기용"만 뺀다)
+      const victims = group.slice().sort(compareByField('__score')).reverse().slice(0, excess);
+
+      victims.forEach((victim) => {
+        const replacement = scored
+          .filter((p) => !usedIds.has(p.id))
+          .filter((p) => masterCategoryOf(p) !== cat)
+          .filter((p) => isDateEligible(p, dp.date))
+          .sort(compareByField('__score'))[0];
+
+        if (!replacement) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[scoring] ${dp.date.toISOString().slice(0, 10)} 카테고리 다양성 제약 완화 — ` +
+              `"${cat}"를 대체할 다른 카테고리 후보가 없어 그대로 둠`
+          );
+          return;
+        }
+
+        if (dp.anchor && dp.anchor.id === victim.id) {
+          dp.anchor = replacement;
+        } else {
+          const idx = dp.picked.findIndex((p) => p.id === victim.id);
+          if (idx !== -1) dp.picked[idx] = replacement;
+        }
+        usedIds.delete(victim.id);
+        usedIds.add(replacement.id);
+      });
+    });
+  });
+}
+
 function toStopShape(poi, order) {
   return {
     poi_id: poi.id,
@@ -118,6 +235,9 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
 
   let pool = pois.filter((p) => !excludeSet.has(p.id));
 
+  // P0(라운드8) — 동일 좌표 POI는 후보 단계에서 하나만 남긴다(가중치와 무관하게 항상 적용).
+  pool = dedupeByCoordinate(pool);
+
   // festival_event: 여행 날짜와 겹치지 않으면 가중치와 무관하게 후보 풀에서 완전히 제외 (PRD 3.5절)
   pool = pool.filter((p) => {
     const tags = p.tags || [];
@@ -128,14 +248,6 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
   const scored = pool.map((p) => ({ ...p, __score: scorePoi(p, weights) }));
   const usedIds = new Set();
 
-  // festival_event 후보는 "일자 검사만 통과하면 배치 가능" — 가중치(__score) 조건을 걸면 안 된다
-  // (라운드2 점검 #1). free_text 없이 생성하면 가중치가 전부 0이라(API_CONTRACT §1) 예전 코드의
-  // `__score > 0` 게이트에 항상 걸려서 개최일이 맞는 축제도 코스에 못 들어갔다.
-  function isDateEligible(poi, date) {
-    if (!(poi.tags || []).includes('festival_event')) return true;
-    return festivalOverlapsDate(poi, date);
-  }
-
   const dayPlans = [];
   for (let i = 0; i < numDays; i += 1) {
     const date = dateForDayIndex(startDate, i);
@@ -143,7 +255,7 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
       .filter((p) => !usedIds.has(p.id))
       .filter((p) => (p.tags || []).includes('festival_event'))
       .filter((p) => festivalOverlapsDate(p, date))
-      .sort((a, b) => b.__score - a.__score)[0] || null;
+      .sort(compareByField('__score'))[0] || null;
 
     if (anchor) usedIds.add(anchor.id);
     dayPlans.push({ date, anchor, slots: maxPerDay - (anchor ? 1 : 0), picked: [] });
@@ -164,7 +276,7 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
     const maxDist = Math.max(1e-6, ...withDistance.map((p) => p.__distanceToAnchor));
     const ranked = withDistance
       .map((p) => ({ ...p, __combined: p.__score - ANCHOR_DISTANCE_PENALTY_WEIGHT * (p.__distanceToAnchor / maxDist) }))
-      .sort((a, b) => b.__combined - a.__combined)
+      .sort(compareByField('__combined'))
       .slice(0, dp.slots);
     dp.picked = ranked;
     const pickedIds = new Set(ranked.map((p) => p.id));
@@ -178,27 +290,37 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
   const totalNonAnchorSlots = nonAnchorDays.reduce((sum, dp) => sum + dp.slots, 0);
   const topPool = freePool
     .filter((p) => !(p.tags || []).includes('festival_event'))
-    .sort((a, b) => b.__score - a.__score)
+    .sort(compareByField('__score'))
     .slice(0, totalNonAnchorSlots);
   const festivalLeftover = freePool.filter((p) => (p.tags || []).includes('festival_event'));
   const clusters = kMeansCluster(topPool, Math.max(nonAnchorDays.length, 1));
 
   let leftover = festivalLeftover.slice();
   nonAnchorDays.forEach((dp, idx) => {
-    const cluster = (clusters[idx] || []).slice().sort((a, b) => b.__score - a.__score);
+    const cluster = (clusters[idx] || []).slice().sort(compareByField('__score'));
     dp.picked = cluster.slice(0, dp.slots);
     leftover = leftover.concat(cluster.slice(dp.slots));
   });
   nonAnchorDays.forEach((dp) => {
     // eslint-disable-next-line no-constant-condition
     while (dp.picked.length < dp.slots) {
-      leftover.sort((a, b) => b.__score - a.__score);
+      leftover.sort(compareByField('__score'));
       const idx = leftover.findIndex((p) => isDateEligible(p, dp.date));
       if (idx === -1) break; // 남은 leftover 중 이 날짜에 맞는 게 없음
       dp.picked.push(leftover[idx]);
       leftover.splice(idx, 1);
     }
   });
+
+  // P0(라운드8) — 하루 스탑의 과반이 같은 카테고리가 되지 않게 후처리(§1 "가중치가 전부 0일 때"
+  // 상자 2번). 계약 확정 문구: "가중치가 일부라도 0이 아닌 경우엔 기존 스코어링이 그대로
+  // 우선한다 — 1·2는 동점 구간에만 개입한다." 가중치가 하나라도 있으면 스코어 차이 자체가
+  // 진짜 취향 반영이라(예: 온천만 원해서 하루가 onsen_wellness 일색이어도 의도된 결과), 이
+  // 후처리는 가중치가 전부 0일 때만 돌린다 — 그 경우에만 전부 동점이라 개입할 "동점 구간"이다.
+  const allWeightsZero = Object.values(weights).every((w) => !w);
+  if (allWeightsZero) {
+    enforceCategoryDiversity(dayPlans, scored);
+  }
 
   // days는 여행 기간 전 일자를 빠짐없이·순서대로 반환한다 — day는 1부터 연속, date는 KST
   // YYYY-MM-DD (API_CONTRACT.md §1 "days 배열 불변식", 라운드3 점검 #4). 라운드2에서 스탑 0개인
@@ -241,10 +363,11 @@ function toCandidateShape(poi) {
  */
 function pickTopCandidates(pois, weights, { excludePoiIds = [], limit = 3 } = {}) {
   const excludeSet = new Set(excludePoiIds);
-  return pois
-    .filter((p) => !excludeSet.has(p.id))
+  // P0(라운드8) — 후보 목록도 동일 좌표 중복 제거 + 결정적 동점 처리를 똑같이 적용한다
+  // (regenerate-stop이 free_text 없이 "다시 추천"만 눌린 경우도 가중치가 전부 0일 수 있다).
+  return dedupeByCoordinate(pois.filter((p) => !excludeSet.has(p.id)))
     .map((p) => ({ ...p, __score: scorePoi(p, weights) }))
-    .sort((a, b) => b.__score - a.__score)
+    .sort(compareByField('__score'))
     .slice(0, limit);
 }
 
