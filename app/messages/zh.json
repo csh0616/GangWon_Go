@@ -11,7 +11,9 @@
     "cancel": "取消",
     "later": "以后再说",
     "retry": "重试",
-    "loading": "加载中…"
+    "loading": "加载中…",
+    "errorBoundaryTitle": "出了点问题",
+    "errorBoundaryBody": "显示这个画面时出现了问题，请重试。"
   },
   "regions": {
     "auto": "都可以",
@@ -125,6 +127,8 @@
     "errorServerBody": "请稍后再试一次。您填写的内容都还保留着。",
     "errorServerHint": "如果一直无法解决，请稍后再打开试试。",
     "errorServerAction": "重试",
+    "errorNetworkTitle": "请检查网络连接",
+    "errorNetworkBody": "网络连接不稳定。请检查网络状态后重试。您填写的内容都还保留着。",
     "errorNoCandidateTitle": "没有找到符合条件的地点",
     "errorNoCandidateBody": "可以延长行程天数，或换一种方式描述您想要的内容。",
     "errorNoCandidateAction": "更改条件",
@@ -207,7 +211,8 @@
       "emergency_room": "急诊室",
       "health_center": "保健所",
       "health_subcenter": "保健支所",
-      "hospital": "医院"
+      "hospital": "医院",
+      "clinic": "诊所"
     },
     "title": "旅行安心指南",
     "subtitleWithLocation": "为您显示距离当前位置最近的机构。",

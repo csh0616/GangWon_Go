@@ -12,7 +12,7 @@ export function CareFacilityCard({
 }: {
   facility: CareFacility;
   distanceKm: number | null;
-  categoryLabel: string;
+  categoryLabel: string | null;
 }) {
   const locale = useLocale() as UiLocale;
   // 병행 표기는 "한국어 + 사용자 언어"용이다(API_CONTRACT.md §4) — 사용자 언어가 이미
@@ -24,7 +24,7 @@ export function CareFacilityCard({
       <div className="min-w-0 flex-grow">
         <p className="truncate text-[14.5px] font-bold tracking-tight">{facility.name_ko}</p>
         {localizedName && <p className="truncate text-[12px] font-medium text-muted">{localizedName}</p>}
-        <p className="mt-0.5 text-[12px] font-medium text-muted">{categoryLabel}</p>
+        {categoryLabel && <p className="mt-0.5 text-[12px] font-medium text-muted">{categoryLabel}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {distanceKm !== null && (

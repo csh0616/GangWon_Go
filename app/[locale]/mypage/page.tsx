@@ -8,7 +8,7 @@ import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/Button";
 import { ItineraryListItem } from "@/components/mypage/ItineraryListItem";
 import { DeleteConfirmModal } from "@/components/mypage/DeleteConfirmModal";
-import { getSession, mockGoogleLogin, logout, type Session } from "@/app/lib/mock/auth";
+import { getSession, mockGoogleLogin, logout, type Session } from "@/app/lib/auth";
 import { listItineraries, deleteItinerary } from "@/app/lib/api";
 import { todayYmd } from "@/app/lib/date";
 import type { SavedItinerarySummary } from "@/app/lib/types";

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { UserRound } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import { getSession, subscribeAuthChange } from "@/app/lib/mock/auth";
+import { getSession, subscribeAuthChange } from "@/app/lib/auth";
 import { LangSwitcher } from "./LangSwitcher";
 
 export function Header({ showCareLink = true }: { showCareLink?: boolean }) {

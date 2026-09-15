@@ -10,6 +10,8 @@ import type {
   CareFacility,
   GenerateRequest,
   GenerateResponseData,
+  NarrateRequestDay,
+  NarrateResponseData,
   RegenerateCandidate,
   RegionCode,
   Relationship,
@@ -27,7 +29,7 @@ import {
 } from "./mock/savedItineraries";
 import { buildMockAlert } from "./mock/alerts";
 import { mockRegenerateCandidates } from "./mock/regenerate";
-import { getSession } from "./mock/auth";
+import { getSession } from "./auth";
 import { publishAlert, subscribeAlerts } from "./mock/realtime";
 import { getSessionSaved, listSessionSaved, putSessionSaved } from "./mock/sessionSavedStore";
 
@@ -37,12 +39,62 @@ export { subscribeAlerts };
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? null;
 const USE_MOCK = !API_BASE;
 
+const REQUEST_TIMEOUT_MS = 20000;
+
 function delay<T>(value: T, ms = 350): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
 function authError(): ApiResult<never> {
   return { data: null, error: { code: "AUTH_REQUIRED", message: "로그인이 필요해요." } };
+}
+
+function networkError(message = "네트워크 연결을 확인해주세요."): ApiResult<never> {
+  return { data: null, error: { code: "NETWORK_ERROR", message } };
+}
+
+function looksLikeApiResult(value: unknown): value is { data: unknown; error: unknown } {
+  return typeof value === "object" && value !== null && "data" in value && "error" in value;
+}
+
+/**
+ * 모든 실 API 호출의 공용 진입점 — 절대 throw하지 않는다(P0-A, HANDOFF_LOG 배포본 3차 점검).
+ * 이전에는 각 함수가 fetch를 try/catch 없이 호출하고 res.json()을 그대로 반환했는데, CORS 차단·
+ * 타임아웃·네트워크 오류로 fetch가 reject하거나 res.json()이 파싱 예외를 던지면 그 예외가 호출부
+ * (result 페이지의 runGenerate)까지 그대로 올라가 setState를 건너뛰고 loading 상태에 박제됐다.
+ * 실패 경로는 전부 계약의 에러 형태({data:null, error:{code,message}})로 수렴시킨다.
+ */
+async function fetchApi<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
+): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: controller.signal });
+  } catch {
+    // fetch 자체가 reject — 네트워크 단절, CORS 차단, AbortController 타임아웃 전부 여기로 모인다
+    return networkError();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    // res.ok가 false인데 본문이 JSON이 아닌 경우(502 게이트웨이 HTML 등) 포함
+    return networkError("서버 응답을 처리하지 못했어요.");
+  }
+
+  if (!looksLikeApiResult(body)) {
+    return networkError("서버 응답 형식이 올바르지 않아요.");
+  }
+
+  return body as ApiResult<T>;
 }
 
 // ── 1. 코스 생성 (게스트 가능) ──────────────────────────────────────
@@ -52,12 +104,40 @@ export async function generateItinerary(
   if (USE_MOCK) {
     return delay(mockGenerate(request), 900);
   }
-  const res = await fetch(`${API_BASE}/api/itineraries/generate`, {
+  return fetchApi<GenerateResponseData>(`${API_BASE}/api/itineraries/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
-  return res.json();
+}
+
+const NARRATE_TIMEOUT_MS = 10000; // API_CONTRACT.md §1 — 10초 넘으면 프론트가 포기하고 설명 없이 남김
+
+/**
+ * /generate가 뼈대만 돌려준 뒤(narration/blurb는 항상 null) 프론트가 이어서 호출해 설명을 채운다.
+ * 실패해도 서버가 200 + 전부 null로 응답하므로(계약), 여기서도 에러를 사용자에게 알리지 않고
+ * 호출부가 조용히 "설명 없는 코스"를 유지하도록 그대로 반환한다.
+ */
+export async function narrateItinerary(
+  lang: GenerateRequest["lang"],
+  selectedRegions: GenerateResponseData["selected_regions"],
+  days: NarrateRequestDay[]
+): Promise<ApiResult<NarrateResponseData>> {
+  if (USE_MOCK) {
+    // 목업은 /generate 단계에서 이미 narration/blurb를 채워 넣으므로(app/lib/mock/generate.ts),
+    // 여기서는 아무것도 새로 채우지 않는 빈 응답을 흉내낸다 — 실제 병합 로직(app/[locale]/result/page.tsx)이
+    // "값이 있을 때만 덮어쓴다"로 짜여 있어 기존 목업 값이 그대로 유지된다.
+    return delay({ data: { narration: { ko: null, en: null, zh: null }, region_reason: null, blurbs: [] }, error: null }, 400);
+  }
+  return fetchApi<NarrateResponseData>(
+    `${API_BASE}/api/itineraries/narrate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang, selected_regions: selectedRegions, days }),
+    },
+    NARRATE_TIMEOUT_MS
+  );
 }
 
 // ── 2. 코스 저장 (로그인 필요) ──────────────────────────────────────
@@ -82,7 +162,7 @@ export async function saveItinerary(
     });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries`, {
+  return fetchApi<SaveItineraryResponseData>(`${API_BASE}/api/itineraries`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -90,7 +170,6 @@ export async function saveItinerary(
     },
     body: JSON.stringify(request),
   });
-  return res.json();
 }
 
 export async function getItinerary(id: string): Promise<ApiResult<SavedItineraryDetail>> {
@@ -107,10 +186,9 @@ export async function getItinerary(id: string): Promise<ApiResult<SavedItinerary
     return delay({ data: found, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries/${id}`, {
+  return fetchApi<SavedItineraryDetail>(`${API_BASE}/api/itineraries/${id}`, {
     headers: session ? { Authorization: `Bearer ${session.token}` } : {},
   });
-  return res.json();
 }
 
 export async function listItineraries(): Promise<ApiResult<{ itineraries: SavedItinerarySummary[] }>> {
@@ -131,10 +209,9 @@ export async function listItineraries(): Promise<ApiResult<{ itineraries: SavedI
     return delay({ data: { itineraries: [...extra, ...mockSavedList()] }, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries`, {
+  return fetchApi<{ itineraries: SavedItinerarySummary[] }>(`${API_BASE}/api/itineraries`, {
     headers: session ? { Authorization: `Bearer ${session.token}` } : {},
   });
-  return res.json();
 }
 
 export async function deleteItinerary(id: string): Promise<ApiResult<{ id: string; status: "cancelled" }>> {
@@ -151,11 +228,10 @@ export async function deleteItinerary(id: string): Promise<ApiResult<{ id: strin
     return delay({ data: { id, status: "cancelled" as const }, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries/${id}`, {
+  return fetchApi<{ id: string; status: "cancelled" }>(`${API_BASE}/api/itineraries/${id}`, {
     method: "DELETE",
     headers: session ? { Authorization: `Bearer ${session.token}` } : {},
   });
-  return res.json();
 }
 
 // ── 3. 실시간 매니징 ────────────────────────────────────────────────
@@ -175,7 +251,7 @@ export async function triggerAlert(
     return delay({ data: payload, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/alerts/trigger`, {
+  return fetchApi<AlertPayload>(`${API_BASE}/api/alerts/trigger`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -183,7 +259,6 @@ export async function triggerAlert(
     },
     body: JSON.stringify({ itinerary_id: itineraryId, trigger_type: "weather", condition: "rain", day, target_poi_id: targetPoiId }),
   });
-  return res.json();
 }
 
 export async function respondAlert(
@@ -205,15 +280,17 @@ export async function respondAlert(
     });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/alerts/${alertId}/respond`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(session ? { Authorization: `Bearer ${session.token}` } : {}),
-    },
-    body: JSON.stringify({ response }),
-  });
-  return res.json();
+  return fetchApi<{ status: "confirmed" | "dismissed"; updated_stop?: { poi_id: string; day: number } }>(
+    `${API_BASE}/api/alerts/${alertId}/respond`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session ? { Authorization: `Bearer ${session.token}` } : {}),
+      },
+      body: JSON.stringify({ response }),
+    }
+  );
 }
 
 export async function regenerateStop(
@@ -231,7 +308,7 @@ export async function regenerateStop(
     return delay({ data: { candidates: mockRegenerateCandidates(region, excludePoiIds) }, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries/regenerate-stop`, {
+  return fetchApi<{ candidates: RegenerateCandidate[] }>(`${API_BASE}/api/itineraries/regenerate-stop`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -239,7 +316,6 @@ export async function regenerateStop(
     },
     body: JSON.stringify({ itinerary_id: itineraryId, day, target_poi_id: targetPoiId, reason: "user_request", free_text: freeText }),
   });
-  return res.json();
 }
 
 export async function confirmStopReplacement(
@@ -287,15 +363,17 @@ export async function confirmStopReplacement(
     return delay({ data: { itinerary_json: nextItineraryJson, day_reordered: true }, error: null });
   }
   const session = getSession();
-  const res = await fetch(`${API_BASE}/api/itineraries/${itineraryId}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      ...(session ? { Authorization: `Bearer ${session.token}` } : {}),
-    },
-    body: JSON.stringify({ day, target_poi_id: targetPoiId, new_poi_id: newPoiId }),
-  });
-  return res.json();
+  return fetchApi<{ itinerary_json: SavedItineraryDetail["itinerary_json"]; day_reordered: boolean }>(
+    `${API_BASE}/api/itineraries/${itineraryId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session ? { Authorization: `Bearer ${session.token}` } : {}),
+      },
+      body: JSON.stringify({ day, target_poi_id: targetPoiId, new_poi_id: newPoiId }),
+    }
+  );
 }
 
 // ── 4. 여행 케어 안내 (로그인 불필요) ──────────────────────────────
@@ -303,8 +381,7 @@ export async function getCare(regionCode: RegionCode): Promise<ApiResult<CareFac
   if (USE_MOCK) {
     return delay({ data: careForRegion(regionCode), error: null });
   }
-  const res = await fetch(`${API_BASE}/api/care?region_code=${regionCode}`);
-  return res.json();
+  return fetchApi<CareFacility[]>(`${API_BASE}/api/care?region_code=${regionCode}`);
 }
 
 export type { Relationship };

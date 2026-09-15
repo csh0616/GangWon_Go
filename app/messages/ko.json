@@ -11,7 +11,9 @@
     "cancel": "취소",
     "later": "나중에",
     "retry": "다시 시도",
-    "loading": "불러오는 중…"
+    "loading": "불러오는 중…",
+    "errorBoundaryTitle": "잠시 문제가 생겼어요",
+    "errorBoundaryBody": "화면을 표시하는 중 문제가 발생했어요. 다시 시도해주세요."
   },
   "regions": {
     "auto": "어디든지",
@@ -125,6 +127,8 @@
     "errorServerBody": "잠시 후 다시 시도해 주세요. 입력하신 내용은 그대로 남아 있어요.",
     "errorServerHint": "계속 안 되면 잠시 뒤에 다시 열어주세요",
     "errorServerAction": "다시 시도",
+    "errorNetworkTitle": "네트워크 연결을\n확인해주세요",
+    "errorNetworkBody": "인터넷 연결이 원활하지 않아요. 연결 상태를 확인하고 다시 시도해 주세요. 입력하신 내용은 그대로 남아 있어요.",
     "errorNoCandidateTitle": "조건에 맞는 장소를\n찾지 못했어요",
     "errorNoCandidateBody": "기간을 늘리거나 원하는 것을\n다르게 적어보세요.",
     "errorNoCandidateAction": "조건 바꾸기",
@@ -207,7 +211,8 @@
       "emergency_room": "응급실",
       "health_center": "보건소",
       "health_subcenter": "보건지소",
-      "hospital": "병원"
+      "hospital": "병원",
+      "clinic": "의원"
     },
     "title": "여행 케어 안내",
     "subtitleWithLocation": "지금 계신 곳에서 가까운 순으로 보여드려요.",

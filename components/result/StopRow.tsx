@@ -3,6 +3,7 @@
 import { useTranslations, useLocale } from "next-intl";
 import { CategoryIcon } from "@/components/icons/CategoryIcon";
 import { pickName, localizedText, type UiLocale } from "@/app/lib/localized";
+import { isKnownCategory } from "@/app/lib/categoryLabels";
 import { cn } from "@/app/lib/cn";
 import type { Stop } from "@/app/lib/types";
 
@@ -23,6 +24,9 @@ export function StopRow({
 
   const { primary, secondary } = pickName(stop.name, locale);
   const blurb = localizedText(stop.blurb, locale);
+  // 모르는 카테고리는 라벨 줄만 생략하고 장소명·순서·지도는 그대로 렌더한다
+  // (API_CONTRACT.md §1 "프론트 방어 규칙" 상자).
+  const categoryLabel = isKnownCategory(stop.category) ? tc(stop.category) : null;
 
   return (
     <div
@@ -48,10 +52,13 @@ export function StopRow({
             </span>
           )}
         </span>
-        <div className="mt-0.5 text-[12.5px] font-medium text-muted">
-          {tc(stop.category)}
-          {blurb && <span className="text-ink-soft"> · {blurb}</span>}
-        </div>
+        {(categoryLabel || blurb) && (
+          <div className="mt-0.5 text-[12.5px] font-medium text-muted">
+            {categoryLabel}
+            {categoryLabel && blurb ? " · " : null}
+            {blurb && <span className="text-ink-soft">{blurb}</span>}
+          </div>
+        )}
       </span>
       {editable && onSwap && (
         <button

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
-import { mockGoogleLogin } from "@/app/lib/mock/auth";
+import { mockGoogleLogin } from "@/app/lib/auth";
 
 type Step = "prompt" | "authorizing" | "retry";
 
