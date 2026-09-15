@@ -16,8 +16,16 @@ async function computeTravel(from, to) {
     const durationSec = await getDrivingDurationSeconds(from, to);
     return { mode, minutes: Math.max(1, Math.round(durationSec / 60)) };
   } catch (err) {
+    // P1(라운드8) — 이 실패의 다수는 출발지=도착지(동일 좌표 POI, scoring.js dedupeByCoordinate로
+    // 대부분 사라짐)였다. dedupe 이후에도 남는 실패는 좌표 문제가 아닌 다른 원인이므로, 다음
+    // 라운드에서 바로 추적할 수 있게 출발/도착 좌표를 로그에 함께 남긴다. 폴백 자체(필드 전체
+    // null, 추정값을 지어내지 않음)는 계약대로라 그대로 둔다.
     // eslint-disable-next-line no-console
-    console.warn('[travel] 이동 정보 계산 실패, null로 둠:', err.message);
+    console.warn(
+      '[travel] 이동 정보 계산 실패, null로 둠:',
+      err.message,
+      `| from=(${from.lat},${from.lng}) to=(${to.lat},${to.lng})`
+    );
     return null;
   }
 }
