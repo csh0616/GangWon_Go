@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronRight } from "lucide-react";
-import { getSession, subscribeAuthChange } from "@/app/lib/mock/auth";
+import { getSession, subscribeAuthChange } from "@/app/lib/auth";
 import { LoginModal } from "./LoginModal";
 
 /** design/artboards/Main.dc.html 상단 배너 — 로그인 전(게스트)일 때만 노출 */

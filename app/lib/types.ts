@@ -116,6 +116,21 @@ export type GenerateRequest = {
   lang: Lang;
 };
 
+/** POST /api/itineraries/narrate 요청 — 프롬프트에 필요한 값만 담는다(좌표·이동시간·is_indoor 제외) */
+export type NarrateRequestDay = {
+  day: number;
+  region_code: RegionCode;
+  stops: { poi_id: string; name_ko: string; category: string }[];
+};
+
+export type NarrateBlurb = { poi_id: string } & Localized;
+
+export type NarrateResponseData = {
+  narration: Localized;
+  region_reason: Localized | null;
+  blurbs: NarrateBlurb[];
+};
+
 export type ErrorCode =
   | "INVALID_STRUCTURED_INPUT"
   | "INVALID_LANG"
@@ -126,7 +141,10 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "ALERT_EXPIRED"
   | "STOP_NOT_FOUND"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  // 서버가 내려주는 코드가 아니라 프론트 fetch 레이어가 붙이는 클라이언트 전용 코드 —
+  // 네트워크 단절/CORS 차단/타임아웃/응답이 JSON이 아님(502 HTML 등) 전부 이걸로 묶는다.
+  | "NETWORK_ERROR";
 
 export type ApiError = {
   code: ErrorCode;
@@ -213,7 +231,9 @@ export type CareFacility = {
   name_ko: string;
   name_en: string | null;
   name_zh: string | null;
-  category: "emergency_room" | "health_center" | "health_subcenter" | "hospital";
+  // 서버가 실제로 이 값들만 보낸다는 보장은 없다(API_CONTRACT.md §4) — 화면 쪽은 항상
+  // isKnownCareCategory()로 런타임 검증 후에만 라벨을 그린다(app/lib/categoryLabels.ts).
+  category: "emergency_room" | "health_center" | "health_subcenter" | "hospital" | "clinic";
   phone: string | null;
   address_ko: string;
   lat: number;

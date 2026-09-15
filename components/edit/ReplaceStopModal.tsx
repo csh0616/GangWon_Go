@@ -6,6 +6,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { CategoryIcon } from "@/components/icons/CategoryIcon";
 import { pickName, localizedText, type UiLocale } from "@/app/lib/localized";
+import { isKnownCategory } from "@/app/lib/categoryLabels";
 import { formatMonthDayWeekday } from "@/app/lib/date";
 import { regenerateStop, confirmStopReplacement } from "@/app/lib/api";
 import type { RegenerateCandidate, RegionCode, Stop } from "@/app/lib/types";
@@ -74,7 +75,9 @@ export function ReplaceStopModal({
           </span>
           <span>
             <p className="text-[14px] font-semibold">{targetName}</p>
-            <p className="text-[11.5px] text-muted">{tc(targetStop.category)}</p>
+            {isKnownCategory(targetStop.category) && (
+              <p className="text-[11.5px] text-muted">{tc(targetStop.category)}</p>
+            )}
           </span>
         </div>
 
@@ -109,6 +112,7 @@ export function ReplaceStopModal({
                 {candidates.map((c) => {
                   const { primary } = pickName(c.name, locale);
                   const blurb = localizedText(c.blurb, locale);
+                  const categoryLabel = isKnownCategory(c.category) ? tc(c.category) : null;
                   const isSelected = selected === c.poi_id;
                   return (
                     <button
@@ -125,10 +129,13 @@ export function ReplaceStopModal({
                       </span>
                       <span className="min-w-0 flex-grow">
                         <p className="text-[14px] font-semibold">{primary}</p>
-                        <p className="text-[11.5px] text-muted">
-                          {tc(c.category)}
-                          {blurb && <span> · {blurb}</span>}
-                        </p>
+                        {(categoryLabel || blurb) && (
+                          <p className="text-[11.5px] text-muted">
+                            {categoryLabel}
+                            {categoryLabel && blurb ? " · " : null}
+                            {blurb}
+                          </p>
+                        )}
                       </span>
                     </button>
                   );

@@ -2997,3 +2997,161 @@ Railway 로그의 이 경고는 폴백이 설계대로 동작한 것이지만, �
 - 블로커: 없음.
 - 다음 액션: 없음(P0/P1/P2 전부 해소, 검증 완료). 프론트 잔여 P0 3건(무한 로딩/에러 바운더리/
   인증 목업)과 승현님의 same-origin 리라이트는 이 작업과 무관하게 진행 가능합니다.
+
+---
+
+## [2026-09-15 13:40] 프론트팀 — 배포본 P0/P1 6건 (네트워크 무한대기 / 렌더 예외 / Supabase 인증 실연동 / narrate 분리 / clinic 라벨 / same-origin 리라이트)
+
+지시서 6건 전부 반영했습니다. 순서대로 기록합니다.
+
+### P0-A — 네트워크 실패 시 "생성중" 무한 대기
+
+`app/lib/api.ts`에 `fetchApi<T>()` 공용 진입점을 추가해 실제 fetch를 쓰는 모든 함수
+(9개)가 이걸 거치도록 바꿨습니다. **절대 throw하지 않습니다**:
+- fetch 자체가 reject(네트워크 단절·CORS 차단)하거나 `AbortController`로 20초 타임아웃되면
+  → `NETWORK_ERROR`
+- `res.json()` 파싱이 실패하면(502 게이트웨이 HTML 등) → `NETWORK_ERROR`
+- 본문이 `{data, error}` 형태가 아니면(서버 응답 계약 위반) → `NETWORK_ERROR`
+
+`ErrorCode`에 `NETWORK_ERROR`를 추가했습니다(서버가 내려주는 코드가 아니라 프론트 fetch
+레이어가 붙이는 클라이언트 전용 코드라고 주석에 명시). `result/page.tsx`의 `runGenerate`도
+try/catch로 한 번 더 감쌌습니다(P0-A 이후엔 사실상 안 던지지만 마지막 방어선). `GenerateErrorScreen`에
+`NETWORK_ERROR` 문구 분기(제목/본문 별도, 아이콘은 `WifiOff`)를 추가하고 ko/en/zh 전부 넣었습니다.
+
+**라이브 검증**: `NEXT_PUBLIC_API_BASE_URL`을 일부러 `http://127.0.0.1:9`(크롬이 "unsafe
+port"로 막아 fetch가 즉시 reject하는 포트)로 돌려 실제 코스 생성을 시도 → "네트워크 연결을
+확인해주세요" 화면이 즉시 뜨고 "다시 시도"를 눌러도 같은 화면으로 안정적으로 떨어지는 것 확인
+(무한 로딩 없음). 확인 후 `.env.local`은 원래 값으로 복구했습니다.
+
+### P0-B — 렌더 예외 하나가 페이지 전체를 죽임
+
+1. `app/lib/categoryLabels.ts`(신규) — 7개 스탑 카테고리 / 5개 케어 카테고리 마스터 목록과
+   `isKnownCategory`/`isKnownCareCategory` 런타임 가드.
+2. `CategoryIcon.tsx` — prop 타입을 `CategoryKey`에서 `string`으로 넓히고, 모르는 값이면
+   `undefined` 컴포넌트를 렌더하는 대신(그 자체로 크래시) `MapPin`으로 대체.
+3. `StopRow.tsx`, `ReplaceStopModal.tsx`(후보 목록 포함), `care/page.tsx` +
+   `CareFacilityCard.tsx` — 라벨을 그리기 전에 `isKnownCategory`/`isKnownCareCategory`로
+   먼저 검증하고, 모르면 **라벨 줄만 생략**하고 장소명·순서·지도·거리는 그대로 렌더합니다
+   (blurb만 있고 카테고리 라벨이 없을 때 " · " 구분자가 안 남게 조건을 같이 처리).
+4. `app/[locale]/error.tsx`(신규) — 세그먼트 에러 바운더리. 부모 레이아웃이 유지되므로
+   `useTranslations` 그대로 사용 가능. `app/global-error.tsx`(신규) — 루트 레이아웃
+   (`app/[locale]/layout.tsx`가 사실상 루트 — 이 저장소엔 별도 `app/layout.tsx`가 없습니다)
+   자체가 죽는 극단적 경우의 최후 방어선. next-intl 컨텍스트가 없어 문구를 하드코딩했고,
+   외부 CSS에도 기대지 않도록 인라인 스타일만 썼습니다.
+5. `app/lib/storage.ts`의 `loadGuestItinerary`에 최소 형태 검증(`days` 배열, 각 day의
+   `stops` 배열 존재)을 추가 — 어긋나면 `clearGuestItinerary()` 후 `null` 반환.
+
+**라이브 검증**:
+- `stops[].category`에 TourAPI 원본 코드(`"A01010900"`)를 심은 `guest_itinerary`를
+  `/result`에 주입 → 크래시 없이 렌더, 카테고리 라벨 줄만 생략되고 장소명·지도는 정상 표시,
+  콘솔 에러 0건 확인 (배포본 1차 점검에서 실제로 죽었던 바로 그 값으로 재현했습니다)
+- `guest_itinerary`에 `days: "not-an-array"`를 심고 `/result` 진입 → 크래시 없이 홈으로
+  복귀, `sessionStorage`에서 해당 키가 실제로 지워진 것까지 확인
+
+### P0-C — Supabase 인증 실연동
+
+- `@supabase/supabase-js` 설치, `app/lib/supabase.ts`(신규)에 브라우저 클라이언트 단일
+  진입점. `flowType: "implicit"`을 명시했습니다 — 이 작업 범위(`/app`,`/components`,`/i18n`)엔
+  서버 라우트를 새로 만들 수 없어서, 별도 `/auth/callback` 콜백 엔드포인트 없이 클라이언트가
+  리다이렉트로 돌아온 URL의 `#access_token` 해시를 직접 파싱해 세션을 만드는 플로우를
+  택했습니다. `SUPABASE_SERVICE_ROLE_KEY`는 이 파일에 없습니다(서버/에이전트 전용, PM 검수
+  항목).
+- `app/lib/auth.ts`(신규) — `app/lib/mock/auth.ts`의 공개 인터페이스(`getSession` /
+  `mockGoogleLogin` / `logout` / `subscribeAuthChange`)를 그대로 유지한 실제 구현으로
+  교체했습니다. `getSession()`이 동기 함수라는 기존 계약을 지키기 위해 모듈 레벨 캐시를
+  두고 `onAuthStateChange`로 계속 갱신합니다. `mock/auth.ts`는 삭제하고, import하던 6개
+  파일(`api.ts` + 지시서의 5개)의 import 경로만 한 줄씩 바꿨습니다 — 함수 이름
+  `mockGoogleLogin`은 실제 구현으로 바뀐 뒤에도 그대로 남아 있습니다(호출부 변경 최소화
+  지시를 문자 그대로 따랐습니다 — 이름이 실제와 안 맞아 어색하지만 `auth.ts` 상단 주석에
+  이유를 남겨뒀습니다).
+- `saveItinerary`/`listItineraries`/`deleteItinerary` 등은 `session.token`을 그대로
+  `Authorization: Bearer`로 쓰고 있었는데, 이제 `session.token`이 실제 Supabase
+  `access_token`이라 별도 수정 없이 바로 맞습니다.
+- **실제 Google OAuth는 팝업이 아니라 전체 페이지 리다이렉트**입니다 — 기존 목업/카피는
+  "팝업" 멘탈모델(design/artboards/*.dc.html의 "Google 로그인 창이 열려요/닫혔어요" 문구,
+  실제로는 안 건드렸습니다)이었지만 실제로는 브라우저 자체가 Google 동의 화면으로
+  이동했다가 돌아옵니다. `redirectTo`는 클릭 시점의 `window.location.href`를 그대로
+  써서 `/ko`, `/en`, `/zh` 로케일이 자동으로 유지됩니다.
+  - **홈 배너(`GuestLoginHint`/`LoginModal`)와 마이페이지(`mypage/page.tsx`)는 추가
+    수정이 필요 없었습니다** — 둘 다 원래부터 마운트 시 `getSession()`을 다시 읽는
+    구조라(하이드레이션 지연을 이미 전제하고 있었음) 리다이렉트로 돌아왔을 때 자연스럽게
+    로그인 상태를 인식합니다.
+  - **저장 버튼 → 로그인 → 저장 흐름은 리다이렉트로 한 번 끊깁니다** — 클릭 시점의
+    `SaveFlowModal` 인스턴스는 돌아왔을 때 이미 사라진 뒤라, `app/lib/storage.ts`에
+    `markPendingSave`/`consumePendingSave`(신규)를 추가해 "저장을 이어가려 했다"는
+    사실만 `sessionStorage`에 남기고, `result/page.tsx`가 코스가 준비된 뒤 이 플래그를
+    확인해 `SaveFlowModal`을 `resumeMode="save"`로 자동으로 다시 엽니다(로그인 화면
+    없이 곧장 저장 재개). Google 동의 화면에서 취소해 URL에 `error` 계열 파라미터가
+    남아 있으면 `resumeMode="retry"`로 열어 재시도 화면부터 보여줍니다.
+- `.env.example`에 `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` 키 이름만
+  추가했습니다(값 없음).
+
+**확인 못 한 것 (중요)**: 로컬에 실제 Supabase 프로젝트 URL/anon key가 없어(`.env.local`에
+카카오 키만 있음) **실제 Google OAuth 왕복(동의 화면 → 콜백 → 세션 생성)은 이 세션에서
+테스트하지 못했습니다.** 대신 확인한 것:
+- Supabase 미설정 상태에서 로그인 시도(홈 배너, 마이페이지, 저장 흐름 3곳 전부) → 크래시 없이
+  기존 "재시도" 화면으로 정상 폴백, 콘솔 에러 0건 — 즉 자격 증명이 없어도 앱이 죽지 않는 것은
+  확인했습니다.
+- `implicit` 플로우 선택과 `#access_token` 해시 자동 처리는 Supabase JS v2 문서 기준으로
+  구현했으나, 실제 Supabase 프로젝트(구글 OAuth 공급자 설정 포함)로 끝까지 왕복해보는 확인은
+  **QA 또는 실제 키가 있는 다음 세션에서 반드시 필요합니다.** 특히: (1) 리다이렉트 후 정말
+  로케일이 유지된 채 같은 화면(`/ko/result` 등)으로 돌아오는지, (2) 저장 재개
+  (`resumeMode="save"`)가 실제로 자동 저장까지 이어지는지, (3) 동의 화면 취소 시 정말
+  `error` 파라미터가 붙어서 오는지(버전에 따라 쿼리스트링/해시 위치가 다를 수 있음).
+
+### P1-D — `/generate` 즉시 렌더 → `narrate` 이어붙이기
+
+- `app/lib/types.ts`에 `NarrateRequestDay`/`NarrateResponseData` 추가.
+- `app/lib/api.ts`에 `narrateItinerary()` 추가 — 실제 호출은 10초 타임아웃(계약 명시,
+  전역 20초와 별도), 목업은 항상 빈 응답(`narration/region_reason` null, `blurbs: []`)을
+  줘서 `mockGenerate`가 이미 채워둔 값을 건드리지 않습니다.
+- `result/page.tsx`에 `mergeNarration()` 추가 — **값이 있을 때만 덮어씁니다**(narrate가
+  실패해도 200 + 전부 null로 오므로, 이미 채워진 걸 null로 되돌리지 않기 위함). `runGenerate`가
+  성공하면 즉시 `"ready"` 상태로 그리고, 곧바로(로딩 스피너 추가 없이) `narrateItinerary`를
+  호출해 완료되면 `setState`로 조용히 병합합니다. 저장 시(`saveGuestItinerary`)에도 병합된
+  값이 그대로 반영됩니다.
+
+**라이브 검증**: 목업의 "null-heavy" 시나리오(인제 단일 시군)와 일반 시나리오(평창)를 각각
+재현 — 둘 다 크래시 없음, narrate 병합 후에도 일반 시나리오의 기존 narration/blurb가 null로
+안 바뀌고 그대로 유지되는 것을 `sessionStorage`에 저장된 값으로 직접 확인.
+
+### P1-E — `clinic` 카테고리 라벨
+
+`app/lib/types.ts`의 `CareFacility.category`에 `"clinic"` 추가, ko/en/zh
+`care.categories.clinic`(의원/Clinic/诊所) 추가. 케어 화면의 방어 규칙(P0-B의
+`isKnownCareCategory`)과 같은 원칙이라 모르는 값은 원래도 라벨만 생략됩니다.
+
+### P0-F — same-origin 리라이트
+
+지시받은 대로 `next.config.ts`에 `/backend/:path*` → Railway 리라이트를 추가했습니다.
+`app/lib/api.ts`의 `API_BASE` 기본값은 지시대로 건드리지 않았습니다 — 배포 반영은 승현님이
+리라이트 머지 후 Vercel 변수를 바꾸는 순서로 진행하시면 됩니다.
+
+**지시서에 없던 발견 — `middleware.ts`도 같이 고쳐야 리라이트가 실제로 동작합니다.**
+next-intl 미들웨어의 matcher(`/((?!api|_next|.*\\..*).*)`)가 `/backend/*`도 매치해서,
+로케일 미들웨어가 `/backend/health`를 `/ko/backend/health`로 307 리다이렉트해버립니다 —
+그러면 `next.config.ts`의 리라이트 규칙(`/backend/:path*`)이 애초에 매치할 URL을 못 받습니다.
+`matcher`에 `backend`를 제외 목록으로 추가했습니다(`/((?!api|_next|backend|.*\\..*).*)`).
+이건 지시서 범위를 벗어난 변경이라 별도로 적습니다 — root 레벨 Next.js 설정 파일이라
+`/app`,`/components`,`/i18n` 밖이지만, 지시받은 기능 자체가 이것 없이는 동작하지 않아서
+포함했습니다.
+
+**검증**: 지시서의 검증 커맨드 그대로 실행
+```
+curl -s localhost:3000/backend/health
+{"data":{"ok":true},"error":null}
+```
+정상 로케일 라우팅(`/` → `/ko` 307, `/ko` → 200)도 회귀 없는 것 확인.
+
+### 종합 검증
+
+- `npx tsc --noEmit` / `npx eslint .` / `npm run build` 전부 통과
+- ko/en/zh 세 언어 모두 `/care`, `/result`(네트워크 에러 화면 포함) 육안 확인
+
+- 블로커: 없음.
+- 다음 액션:
+  - **승현님/QA**: 실제 Supabase 자격 증명으로 Google 로그인 전체 왕복(동의 화면 → 콜백 →
+    세션 생성 → 로케일 유지 → 저장 재개)을 최종 확인해주세요 — 이번 세션은 자격 증명이 없어
+    이 부분만은 "크래시 안 함"까지만 확인했고 "실제로 로그인이 된다"는 확인하지 못했습니다.
+  - **승현님**: `next.config.ts` 리라이트 머지 후 Vercel `NEXT_PUBLIC_API_BASE_URL`을
+    `/backend`로 교체(순서 중요, 먼저 바꾸면 404).

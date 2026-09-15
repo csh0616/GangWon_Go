@@ -22,13 +22,34 @@ export function saveGuestItinerary(value: GuestItinerary) {
   }
 }
 
+/**
+ * sessionStorage 값을 검증 없이 그대로 신뢰하면, 과거에 저장된 깨진 응답이 새로고침마다
+ * 재생되어 빠져나올 수 없는 크래시 루프를 만든다(P0-B, 실제로 발생했다 — HANDOFF_LOG 배포본
+ * 1차 점검). days 배열과 각 day의 stops 배열이 있는지만 최소로 확인하고, 어긋나면 저장소를
+ * 비우고 null을 반환해 /result가 pending_request부터 다시 생성하도록 한다.
+ */
+function isValidGuestItinerary(value: unknown): value is GuestItinerary {
+  if (!value || typeof value !== "object") return false;
+  const days = (value as { response?: { itinerary_json?: { days?: unknown } } }).response?.itinerary_json?.days;
+  if (!Array.isArray(days)) return false;
+  return days.every(
+    (d) => d && typeof d === "object" && Array.isArray((d as { stops?: unknown }).stops)
+  );
+}
+
 export function loadGuestItinerary(): GuestItinerary | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.sessionStorage.getItem(GUEST_ITINERARY_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as GuestItinerary;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isValidGuestItinerary(parsed)) {
+      clearGuestItinerary();
+      return null;
+    }
+    return parsed;
   } catch {
+    clearGuestItinerary();
     return null;
   }
 }
@@ -110,6 +131,35 @@ export function consumeJustSaved(id: string): boolean {
       return true;
     }
     return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 저장 버튼 → 구글 로그인은 실제 OAuth에서는 전체 페이지 리다이렉트다(P0-C) — 로그인을
+ * 누른 순간의 React 상태(SaveFlowModal이 열려 있던 것)는 리다이렉트로 돌아왔을 때 이미
+ * 사라진 뒤다. "로그인하러 가기 직전에 저장을 이어서 하려 했다"는 사실만 sessionStorage에
+ * 남겨두고, 돌아온 페이지가 이 값을 보고 저장을 자동으로 재개한다
+ * (components/save/SaveFlowModal.tsx의 resumeMode, app/[locale]/result/page.tsx 참고).
+ */
+const PENDING_SAVE_KEY = "ggo:pending_save";
+
+export function markPendingSave() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(PENDING_SAVE_KEY, "1");
+  } catch {
+    // no-op
+  }
+}
+
+export function consumePendingSave(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const had = window.sessionStorage.getItem(PENDING_SAVE_KEY) === "1";
+    window.sessionStorage.removeItem(PENDING_SAVE_KEY);
+    return had;
   } catch {
     return false;
   }

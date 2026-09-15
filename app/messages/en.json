@@ -11,7 +11,9 @@
     "cancel": "Cancel",
     "later": "Later",
     "retry": "Retry",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "errorBoundaryTitle": "Something went wrong",
+    "errorBoundaryBody": "We ran into a problem showing this screen. Please try again."
   },
   "regions": {
     "auto": "Anywhere",
@@ -125,6 +127,8 @@
     "errorServerBody": "Please try again in a moment. What you entered is still here.",
     "errorServerHint": "If this keeps happening, please try again a little later.",
     "errorServerAction": "Try again",
+    "errorNetworkTitle": "Check your network\nconnection",
+    "errorNetworkBody": "Your internet connection seems unstable. Check your connection and try again. What you entered is still here.",
     "errorNoCandidateTitle": "Couldn't find a matching place",
     "errorNoCandidateBody": "Try a longer trip, or describe what you want differently.",
     "errorNoCandidateAction": "Change conditions",
@@ -207,7 +211,8 @@
       "emergency_room": "Emergency room",
       "health_center": "Health center",
       "health_subcenter": "Health subcenter",
-      "hospital": "Hospital"
+      "hospital": "Hospital",
+      "clinic": "Clinic"
     },
     "title": "Travel Care guide",
     "subtitleWithLocation": "Showing places closest to where you are.",

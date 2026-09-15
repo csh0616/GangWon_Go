@@ -10,6 +10,7 @@ import { CarePermissionModal } from "@/components/care/CarePermissionModal";
 import { getCare } from "@/app/lib/api";
 import { haversineKm } from "@/app/lib/geo";
 import { OPEN_REGION_CODES } from "@/app/lib/regions";
+import { isKnownCareCategory } from "@/app/lib/categoryLabels";
 import type { CareFacility, OpenRegionCode } from "@/app/lib/types";
 
 type LocationState = "unknown" | "denied" | { lat: number; lng: number };
@@ -106,7 +107,7 @@ export default function CarePage() {
               key={`${facility.name_ko}-${i}`}
               facility={facility}
               distanceKm={hasLocation ? haversineKm(location.lat, location.lng, facility.lat, facility.lng) : null}
-              categoryLabel={tcat(facility.category)}
+              categoryLabel={isKnownCareCategory(facility.category) ? tcat(facility.category) : null}
             />
           ))}
         </div>
