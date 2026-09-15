@@ -1,6 +1,31 @@
 // PRD 3.5절 — DB 조회 + 알고리즘 (LLM 미사용) 단계. API_CONTRACT.md §1 3번 처리 단계에 대응.
-const { ACTIVITY_STOP_RANGE } = require('./categories');
+const { ACTIVITY_STOP_RANGE, isValidCategoryKey } = require('./categories');
 const { haversineKm, twoOptOptimize, kMeansCluster } = require('./geo');
+
+// P0-1 — pois.category는 TourAPI 원본 코드("A01010900")이고, 7개 마스터 키는 pois.tags[0]에
+// 이미 매핑돼 들어가 있다(category_mapping.js). 예전에는 toStopShape/toCandidateShape가
+// poi.category를 그대로 내보내서 프론트 메시지 카탈로그에 없는 값이 나가 next-intl이 예외를
+// 던지고 렌더 트리가 무너졌다. 스탑을 만드는 단 한 곳(이 함수)에서만 tags[0]로 바꾸고, 나머지
+// 모든 경로가 toStopShape/toCandidateShape를 거치게 해서 같은 사고가 다른 화면에서 재발하지
+// 않게 한다. tags가 비어 있거나 7개 키가 아니면(동기화 버그 등 비정상 상황) null — 빈 문자열이나
+// 원본 코드를 그대로 내보내지 않는다.
+function resolveMasterCategory(poi) {
+  const key = Array.isArray(poi.tags) ? poi.tags[0] : null;
+  return isValidCategoryKey(key) ? key : null;
+}
+
+// P0-1 — 이 수정 이전에 생성·저장된 itinerary_json은 이미 TourAPI 원본 코드가 category에 박혀
+// 있을 수 있다. 재동기화로는 고칠 수 없는 과거 데이터라, 저장된 코스를 다시 내보내는 지점
+// (GET /:id, PATCH 응답)에서 한 번 더 검증해 마스터 키가 아니면 null로 떨어뜨린다.
+function sanitizeStoredDays(days) {
+  if (!Array.isArray(days)) return days;
+  return days.map((d) => ({
+    ...d,
+    stops: Array.isArray(d.stops)
+      ? d.stops.map((s) => ({ ...s, category: isValidCategoryKey(s.category) ? s.category : null }))
+      : d.stops,
+  }));
+}
 
 // 앵커 주변 채우기: 거리가 스코어 순위를 얼마나 흔들 수 있는지 (0=거리 무시, 1=거리만 봄).
 // 스코어를 1차 기준으로 유지하면서 근접도로 동점/근소차를 가르는 정도의 값 (1주차 점검 #13).
@@ -60,7 +85,7 @@ function toStopShape(poi, order) {
     // 라운드5 【3】 — name이 문자열 → {ko,en,zh} 객체로 변경. ko는 TourAPI 원본이라 항상 있고,
     // en/zh는 배치 동기화 시 생성 실패하면 null일 수 있다(pois.name_en/name_zh 그대로 옮김).
     name: { ko: poi.name, en: poi.name_en ?? null, zh: poi.name_zh ?? null },
-    category: poi.category,
+    category: resolveMasterCategory(poi),
     is_indoor: poi.is_indoor ?? false,
     lat: poi.lat,
     lng: poi.lng,
@@ -204,7 +229,7 @@ function toCandidateShape(poi) {
   return {
     poi_id: poi.id,
     name: { ko: poi.name, en: poi.name_en ?? null, zh: poi.name_zh ?? null },
-    category: poi.category,
+    category: resolveMasterCategory(poi),
     is_indoor: poi.is_indoor ?? false,
     lat: poi.lat,
     lng: poi.lng,
@@ -235,4 +260,5 @@ module.exports = {
   pickTopCandidates,
   toStopShape,
   toCandidateShape,
+  sanitizeStoredDays,
 };

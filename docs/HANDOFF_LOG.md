@@ -2759,3 +2759,82 @@ API 서버 프로세스 안에서 안 돈다, `agent/src/index.js` 별도 진입
     `clinic` category 라벨(ko/en/zh) 추가, 알 수 없는 category 폴백.
   - **백엔드**: `name_en`/`name_zh` 문자 검증 추가 후 재동기화.
   - **승현님**: 위 1~3 (배포). **9/21까지 6일, 통합에 최소 이틀은 남겨야 합니다.**
+
+---
+
+## [2026-09-15 14:20] 백엔드팀 — P0-1 stops[].category 마스터 키 미준수(배포 크래시) 긴급 수정 + P0-2 name_en/zh 문자 검증 재동기화
+
+### P0-1 — 원인: `toStopShape`/`toCandidateShape`가 `poi.category`(TourAPI 원본 코드)를 그대로 내보냄
+
+`pois.category`는 TourAPI 원본 코드(`"A01010900"` 등, 동기화 원본 보존용)이고, 7개 마스터 키는
+이미 같은 row의 `tags[0]`에 매핑돼 들어가 있었다(`category_mapping.js`는 처음부터 정상). 그런데
+스탑/후보를 만드는 두 함수(`scoring.js`의 `toStopShape`/`toCandidateShape`)가 `category:
+poi.category`로 원본 코드를 그대로 실어 보내서, 프론트 메시지 카탈로그(7개 키만 등록)에 없는
+값이 나가 next-intl이 예외를 던지고 렌더 트리가 무너졌다.
+
+**조치**: `scoring.js`에 `resolveMasterCategory(poi)` 하나만 추가해 `poi.tags[0]`가 7개 키
+(`categories.js`의 `isValidCategoryKey`, 재정의 안 함)인지 검증 후 반환(아니면 `null`)하고,
+`toStopShape`/`toCandidateShape` 둘 다 이걸 쓰도록 바꿨다. 이 두 함수가 스탑/후보를 만드는
+유일한 지점이라(`buildItineraryDays`/`pickTopCandidates`/`alertTrigger.js`/`regenerate-stop`/
+`PATCH`가 전부 이걸 거침) 한 곳만 고치면 됐다.
+
+**과거에 저장된 데이터 방어**: 이 수정 이전에 생성·저장된 `itinerary_json`은 이미 원본 코드가
+`category`에 박혀 있을 수 있다(재동기화로는 못 고치는 과거 데이터). `sanitizeStoredDays(days)`를
+추가해 저장된 코스를 다시 내보내는 지점에서 한 번 더 검증한다.
+- `GET /api/itineraries/:id` — 응답 직전 sanitize (읽기 전용, DB는 안 건드림).
+- `PATCH /api/itineraries/:id` — 교체 안 된 스탑도 pass-through되므로, **응답뿐 아니라 저장
+  시점에도** sanitize해서 다음부터는 방어 없이도 깨끗하게 나가도록 self-heal.
+- `alertTrigger.js`의 `respondToAlert`(POST /api/alerts/:id/respond) — 같은 pass-through 패턴이라
+  동일하게 저장 시점 sanitize 추가.
+
+**검증**: 지시된 curl 커맨드 그대로 실행 — `injae`/`hongcheon`/`pyeongchang` 3개 시군, `free_text`
+있음/없음(가중치 0 경로 포함) 전부 확인.
+```
+injae:       ['nature_hiking', 'onsen_wellness']            (free_text 있음)
+injae:       ['culture_history','food_local','leisure_sports','nature_hiking']  (free_text 없음)
+hongcheon:   ['culture_history','food_local','leisure_sports','nature_hiking','onsen_wellness']
+pyeongchang: ['food_local','leisure_sports','nature_hiking']
+```
+`A`로 시작하는 원본 코드 0건. 실제 Supabase 테스트 유저로 저장→`GET /:id`(레거시 원본 코드를
+DB에 직접 주입해 재현 확인, sanitize로 `null` 전환 확인)→`regenerate-stop`(후보 category 전부
+마스터 키)→`PATCH`(교체 안 된 레거시 스탑도 응답·DB 저장 둘 다 `null`로 self-heal 확인)→
+`alerts/trigger`(candidate_poi.category 마스터 키 확인)까지 end-to-end로 실호출 검증. 테스트
+데이터는 전부 정리(삭제) 완료.
+
+### P0-2 — name_en/zh 문자 클래스 검증 추가, 재동기화 완료
+
+`translate_name.js`의 `translateName()` 최종 합성 문자열에 검증을 추가했다(접미사+LLM 지명
+번역을 합친 뒤 한 번만 검사하면 되므로 한 곳으로 충분).
+- `name_en`: `/^[A-Za-z0-9 '.\-()]*$/` — ASCII 문자·숫자·공백·하이픈·아포스트로피·마침표·괄호.
+- `name_zh`: `/^[一-鿿0-9 ()]*$/` — CJK 한자 + ASCII 숫자/공백/괄호. 화이트리스트라
+  한글·키릴 등은 명시적 예외 처리 없이 자동으로 걸린다.
+- 실패한 언어만 `null`(다른 언어가 정상이면 그대로 둠). `pois`/`care_facilities` 양쪽에 동일 적용
+  (같은 함수를 공유하므로 자동으로 둘 다 적용됨).
+
+**재동기화 실행 결과**:
+
+| 테이블 | 전체 | name_en null | name_zh null |
+|---|---|---|---|
+| `pois` | 482 | 5 (1.0%) | 84 (17.4%) |
+| `care_facilities` | 170 | 9 (5.3%) | 13 (7.6%) |
+
+재동기화 후 DB 전수 스캔(정규식으로 직접 재검증)으로 **위반 문자가 남은 row 0건** 확인(양쪽
+테이블, en/zh 전부). 보고됐던 "약손한의원" 재확인 — 이번 재동기화에서는 en/zh 둘 다 null로
+떨어졌다(LLM 출력이 매 호출 달라지므로 실행마다 결과가 다를 수 있음 — 어느 쪽이든 한국어
+원문만 노출되는 안전한 결과).
+
+**`name_zh` null 비율(17.4%)이 상대적으로 높은 이유 — 검증기 버그 아님**: 재동기화 로그를
+확인해보니, 탈락한 사례의 상당수가 "구만동계곡" → `"구만洞溪谷"`, "봉평궁" → `"봉평궁"`(중국어
+번역 자체가 아예 안 되고 한글이 그대로 남음)처럼 **LLM이 애초에 고유어 지명(한자 유래가 아닌
+순우리말 지명·음식점 이름)을 중국어로 옮기지 못하고 한글을 섞어서 반환하던 기존 품질 문제를
+검증기가 드러낸 것**이다. 이 문제 자체는 새로 생긴 게 아니라 라운드5/6부터 있었고, 이번에
+처음으로 화면에 안 나가게 걸러졌다 — 즉 이전에는 `name_zh`에 한글이 섞인 채로 "중국어"라고
+표시되고 있었다(더 나쁜 상태였다). `care_facilities`가 `pois`보다 비율이 낮은 건(7.6% vs 17.4%)
+시설명이 접미사(고정 사전) 비중이 크고 지명이 짧아 LLM이 상대적으로 덜 틀리기 때문으로 보인다.
+
+- 블로커: 없음.
+- 참고(이번 작업 범위 밖, 다음에 고려할 것): `name_zh` null 비율을 낮추려면 순우리말 지명은
+  "의미 번역 대신 한어병음 음역"으로 프롬프트를 바꾸는 게 나을 수 있다 — 지금은 프롬프트가
+  "한자 지명이면 한자로, 아니면 음역해줘"라고만 돼 있는데 모델이 이 지시를 지키지 않는 사례가
+  많았다. 이번 라운드는 안전 검증(P0-2 요구사항)까지만 하고 프롬프트 튜닝은 건드리지 않았다.
+- 다음 액션: 없음(두 P0 전부 해소, 검증 완료).

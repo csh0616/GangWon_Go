@@ -5,7 +5,14 @@
 const { supabaseAdmin } = require('../config/supabaseClient');
 const { apiError } = require('../middleware/errorHandler');
 const { filterOutdoorForRain } = require('./alertAdjust');
-const { filterByRelationship, pickTopCandidates, dateForDayIndex, festivalOverlapsDate, toCandidateShape } = require('./scoring');
+const {
+  filterByRelationship,
+  pickTopCandidates,
+  dateForDayIndex,
+  festivalOverlapsDate,
+  toCandidateShape,
+  sanitizeStoredDays,
+} = require('./scoring');
 const { filterWithinDuration } = require('./directions');
 const { twoOptOptimize, haversineKm } = require('./geo');
 const { fillTravelFromPrev } = require('./travel');
@@ -254,7 +261,9 @@ async function respondToAlert({ alertId, userId, response }) {
     days[updatedDayIndex] = { ...days[updatedDayIndex], stops: await fillTravelFromPrev(days[updatedDayIndex].stops) };
   }
 
-  const newItineraryJson = { ...itinerary.itinerary_json, days };
+  // P0-1 — 교체 대상이 아닌 스탑은 그대로 통과되므로, 이 수정 이전에 저장된 legacy category
+  // (TourAPI 원본 코드)가 남아있다면 저장 시점에 정리한다(scoring.js 참고).
+  const newItineraryJson = { ...itinerary.itinerary_json, days: sanitizeStoredDays(days) };
 
   const { error: updateItnErr } = await supabaseAdmin.from('itineraries').update({ itinerary_json: newItineraryJson }).eq('id', itinerary.id);
   if (updateItnErr) throw updateItnErr;
