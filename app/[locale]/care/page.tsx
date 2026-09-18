@@ -13,16 +13,20 @@ import { OPEN_REGION_CODES } from "@/app/lib/regions";
 import { isKnownCareCategory } from "@/app/lib/categoryLabels";
 import type { CareFacility, OpenRegionCode } from "@/app/lib/types";
 
-type LocationState = "unknown" | "denied" | { lat: number; lng: number };
+type LocationState = "unknown" | { lat: number; lng: number };
+type LocationErrorKind = "denied" | "unavailable" | "timeout" | null;
 
 export default function CarePage() {
   const t = useTranslations("care");
+  const tc = useTranslations("common");
   const tr = useTranslations("regions");
   const tcat = useTranslations("care.categories");
 
   const [region, setRegion] = useState<OpenRegionCode>("pyeongchang");
   const [facilities, setFacilities] = useState<CareFacility[] | null>(null);
   const [location, setLocation] = useState<LocationState>("unknown");
+  const [locationError, setLocationError] = useState<LocationErrorKind>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
 
   useEffect(() => {
@@ -32,14 +36,45 @@ export default function CarePage() {
   function requestLocation() {
     setPermissionOpen(false);
     if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setLocation("denied");
+      setLocationError("unavailable");
       return;
     }
+    setLocationLoading(true);
+    setLocationError(null);
     navigator.geolocation.getCurrentPosition(
-      (pos) => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => setLocation("denied"),
-      { timeout: 8000 }
+      (pos) => {
+        setLocationLoading(false);
+        setLocationError(null);
+        setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      (err) => {
+        setLocationLoading(false);
+        if (err.code === err.PERMISSION_DENIED) setLocationError("denied");
+        else if (err.code === err.TIMEOUT) setLocationError("timeout");
+        else setLocationError("unavailable");
+      },
+      // maximumAge: 5분 내 캐시된 위치를 즉시 재사용 — 매번 새로 측위하면 macOS Chrome의
+      // Wi-Fi 측위(5~15초)가 8초 타임아웃에 자주 걸렸다. 거리순 정렬에는 고정밀 위치가
+      // 필요 없어 enableHighAccuracy도 끈다.
+      { timeout: 15000, maximumAge: 300000, enableHighAccuracy: false }
     );
+  }
+
+  async function handleAllowLocationClick() {
+    // 브라우저 권한이 이미 granted면 우리 자체 모달을 또 띄우지 않고 곧장 측위한다.
+    // Safari 일부처럼 permissions API가 없으면 기존처럼 모달로 폴백한다.
+    if (typeof navigator !== "undefined" && navigator.permissions?.query) {
+      try {
+        const status = await navigator.permissions.query({ name: "geolocation" });
+        if (status.state === "granted") {
+          requestLocation();
+          return;
+        }
+      } catch {
+        // permissions API 조회 실패 — 아래 폴백으로 모달을 띄운다.
+      }
+    }
+    setPermissionOpen(true);
   }
 
   const hasLocation = typeof location === "object";
@@ -69,19 +104,47 @@ export default function CarePage() {
           ))}
         </div>
 
-        <div className="mt-4 flex items-center justify-between rounded-2xl bg-bg-subtler px-4 py-3">
-          <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-soft">
-            <MapPin size={14} className="text-muted" strokeWidth={1.6} />
-            {hasLocation ? t("sortNear") : t("noLocationNote", { region: tr(region) })}
-          </span>
-          {!hasLocation && (
-            <button
-              type="button"
-              onClick={() => setPermissionOpen(true)}
-              className="shrink-0 rounded-full bg-brand px-3.5 py-2 text-[12px] font-bold text-white"
-            >
-              {t("allowLocation")}
-            </button>
+        <div className="mt-4 rounded-2xl bg-bg-subtler px-4 py-3">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-soft">
+              <MapPin size={14} className="text-muted" strokeWidth={1.6} />
+              {hasLocation ? t("sortNear") : t("noLocationNote", { region: tr(region) })}
+            </span>
+            {!hasLocation &&
+              (locationLoading ? (
+                <button
+                  type="button"
+                  disabled
+                  className="shrink-0 rounded-full bg-brand/50 px-3.5 py-2 text-[12px] font-bold text-white"
+                >
+                  {t("locationLoading")}
+                </button>
+              ) : locationError === "timeout" || locationError === "unavailable" ? (
+                <button
+                  type="button"
+                  onClick={requestLocation}
+                  className="shrink-0 rounded-full bg-brand px-3.5 py-2 text-[12px] font-bold text-white"
+                >
+                  {tc("retry")}
+                </button>
+              ) : locationError === "denied" ? null : (
+                <button
+                  type="button"
+                  onClick={handleAllowLocationClick}
+                  className="shrink-0 rounded-full bg-brand px-3.5 py-2 text-[12px] font-bold text-white"
+                >
+                  {t("allowLocation")}
+                </button>
+              ))}
+          </div>
+          {!hasLocation && locationError && (
+            <p className="mt-2 text-[11.5px] font-semibold text-danger">
+              {locationError === "denied"
+                ? t("locationDeniedNote")
+                : locationError === "timeout"
+                  ? t("locationTimeoutNote")
+                  : t("locationUnavailableNote")}
+            </p>
           )}
         </div>
 

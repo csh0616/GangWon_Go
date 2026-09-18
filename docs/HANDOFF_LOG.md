@@ -3452,3 +3452,54 @@ PM 세션이 `docs/HANDOFF_LOG.md`를 자기 작업 사본에 이어붙인 뒤 �
 - 다음 액션: PM/승현님이 배포본에서 시크릿 창으로 검증 체크리스트 1~6번(특히 WS 연결,
   삭제 후 URL 직접 접근, 저장 직후 모달 닫고 이동) 최종 확인. 9/19 오전까지 Realtime이
   배포본에서도 안 되면 1번만 되돌리고 2~4는 유지해주세요.
+
+## [2026-09-19 10:15] 프론트팀
+
+- 변경: 여행 케어(`app/[locale]/care/page.tsx`) 위치 권한 버그 수정. 담당 범위(해당 파일과
+  `components/care/`)만 수정, 다른 화면·기능·`/server` `/agent` `/scripts` 미접근.
+  `docs/STATUS.md` 지시대로 STATUS.md만 먼저 읽고 HANDOFF_LOG는 읽지 않았습니다.
+
+  증상: "위치 허용"을 눌러도 대부분 반응이 없고 다시 누르면 권한 모달만 또 떴음.
+
+  원인 3가지, 전부 수정:
+  1. `getCurrentPosition`이 `maximumAge` 기본값(0)이라 매번 새로 측위를 강제해, macOS
+     Chrome Wi-Fi 측위(5~15초)가 8초 타임아웃에 자주 걸림 →
+     `{ timeout: 15000, maximumAge: 300000, enableHighAccuracy: false }`로 조정.
+  2. 실패 원인(거부/시간 초과/미지원)을 전부 `"denied"` 하나로 뭉개 화면에 아무 피드백도
+     없었음 → `GeolocationPositionError.code`로 `denied`/`unavailable`/`timeout` 3종으로
+     분리, 각각 ko/en/zh 안내 문구 추가(`care.locationDeniedNote` 등 신규 키 4개:
+     `locationLoading`/`locationDeniedNote`/`locationUnavailableNote`/`locationTimeoutNote`).
+     `unavailable`·`timeout`에는 "다시 시도" 버튼(우리 모달 재오픈 없이 `getCurrentPosition`
+     직접 재호출), `denied`는 안내 문구만(브라우저 차단은 재시도해도 똑같이 실패하므로
+     버튼 없음 — 지시받은 대로).
+  3. 요청 중 버튼을 비활성화하고 "위치 확인 중…"으로 바꿔, 눌러도 아무 일 없는 것처럼
+     보이던 문제 제거.
+  4. `navigator.permissions.query({name:"geolocation"})`로 이미 `granted`면 자체 모달을
+     건너뛰고 곧장 측위. API 미지원(Safari 일부)이거나 조회 실패 시 try/catch로 감싸
+     기존처럼 모달로 폴백.
+  - `watchPosition`으로 바꾸지 않음(케어 목록은 1회 측위로 충분, 배터리만 낭비). 위치
+    없을 때의 기존 시군 기준 정렬 폴백은 그대로 유지.
+
+- 검증: `navigator.geolocation.getCurrentPosition`/`navigator.permissions.query`를
+  `javascript_exec`로 모킹해(실제 OS 권한 프롬프트는 자동화 불가) 아래를 라이브 확인 —
+  전부 콘솔 에러 없음.
+  - `prompt` 상태 + "위치 허용" 클릭 → 우리 모달 뜸(정상, 기존 동작 유지)
+  - 모달에서 허용 → TIMEOUT 에러 → "다시 시도" 버튼 + "위치를 가져오는 데 시간이
+    걸려요." 문구 노출 확인
+  - "다시 시도" 클릭(모달 재오픈 없이 직접 재호출) → 성공 → 목록이 거리순으로
+    재정렬되고 카드에 km 표시, 에러/버튼 사라짐 확인
+  - 새로고침 후 `permissions.query`가 `granted` 반환 → "위치 허용" 클릭 시 모달 없이
+    즉시 거리순 전환 확인
+  - `PERMISSION_DENIED` → 버튼 없이 "위치 권한이 거부되었어요. 브라우저 설정에서
+    허용해 주세요." 문구만 노출 확인(en에서도 동일 시나리오 확인)
+  - `POSITION_UNAVAILABLE` → "다시 시도" 버튼 + "无法获取您的位置。" 문구 노출 확인(zh)
+  - 위치를 끝내 못 받는 모든 케이스에서 시설 목록·전화번호 링크·SOS 버튼은 정상 동작
+  - `npx tsc --noEmit` / `npx eslint .`(기존 무관 경고 3건 외 없음) / `npm run build`
+    모두 clean
+- 블로커: 없음. 실제 OS 권한 프롬프트(브라우저 네이티브 다이얼로그) 자체는 자동화
+  도구로 클릭할 수 없어 API 모킹으로 대체 검증했습니다 — 코드 경로는 실제 브라우저
+  `GeolocationPositionError`/`PermissionStatus` 스펙과 일치하므로 배포본에서도 동일하게
+  동작할 것으로 판단하지만, 실제 브라우저 권한 프롬프트 UX는 승현님 QA 때 한 번 더
+  확인해주시면 좋겠습니다.
+- 다음 액션: 없음(이 항목은 여기서 완결). 9/20 QA 때 여행 케어 "위치 허용" 흐름도
+  함께 확인 부탁드립니다.

@@ -240,7 +240,11 @@
     "permissionTitle": "Show the closest\nplaces first?",
     "permissionBody": "We'll sort hospitals and health centers by distance from where you are right now.",
     "permissionPrivacy": "Your location is only used while this screen is open — never sent or stored.",
-    "permissionAllow": "Allow location"
+    "permissionAllow": "Allow location",
+    "locationLoading": "Checking location…",
+    "locationDeniedNote": "Location access was denied. Please allow it in your browser settings.",
+    "locationUnavailableNote": "We couldn't get your location.",
+    "locationTimeoutNote": "Getting your location is taking a while."
   },
   "notFound": {
     "title": "Course not found",
