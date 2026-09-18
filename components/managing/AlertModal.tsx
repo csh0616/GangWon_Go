@@ -27,11 +27,14 @@ export function AlertModal({
   itineraryJson,
   onRespond,
   onExpired,
+  error = false,
 }: {
   alert: AlertPayload;
   itineraryJson: ItineraryJson;
   onRespond: (response: "yes" | "no") => void;
   onExpired: () => void;
+  /** Yes/No 응답 전송 자체가 실패했을 때 — 모달을 닫지 않고 다시 시도할 수 있게 알린다 */
+  error?: boolean;
 }) {
   const t = useTranslations("managing");
   const locale = useLocale() as UiLocale;
@@ -102,6 +105,10 @@ export function AlertModal({
         </div>
 
         <p className="mt-4 text-center text-[12px] text-muted">{t("confirmHint")}</p>
+
+        {error && (
+          <p className="mt-3 text-center text-[12px] font-semibold text-danger">{t("respondError")}</p>
+        )}
 
         <div className="mt-4 flex gap-2.5">
           <button

@@ -11,17 +11,23 @@ import { supabase, isSupabaseConfigured } from "./supabase";
 
 const AUTH_CHANGE_EVENT = "ggo:auth-changed";
 
-export type Session = { user_id: string; token: string };
+// user_id에 "@gmail.com"을 붙여 지어낸 이메일을 보여주던 버그(외부 검수 리포트 23)의 수정
+// 대상 — 실제 Supabase 세션의 user.email을 담는다. 이메일이 없으면(드묾) null.
+export type Session = { user_id: string; token: string; email: string | null };
 
 // getSession()이 동기 함수라는 기존 인터페이스를 유지하기 위한 캐시 — Supabase의 실제
 // getSession()은 비동기라, 모듈 로드 시 한 번 채우고 onAuthStateChange로 계속 갱신한다.
 // 이미 이 패턴을 쓰던 기존 호출부(Header/GuestLoginHint가 subscribeAuthChange로 재조회,
 // mypage가 "checking" 상태로 하이드레이션 지연을 흡수)가 그대로 맞아떨어진다.
 let cachedSession: Session | null = null;
+// 모듈이 로드된 뒤 Supabase의 최초 getSession()/onAuthStateChange 응답을 한 번이라도
+// 받았는지 — 리다이렉트 직후엔 이게 false인 동안 cachedSession이 null이어도 "로그아웃
+// 상태"가 아니라 "아직 확인 중"이다. useAuthSession 훅이 이 구분을 쓴다.
+let ready = false;
 
 function toSession(session: SupabaseSession | null): Session | null {
   if (!session) return null;
-  return { user_id: session.user.id, token: session.access_token };
+  return { user_id: session.user.id, token: session.access_token, email: session.user.email ?? null };
 }
 
 function emitAuthChange() {
@@ -32,16 +38,27 @@ function emitAuthChange() {
 if (typeof window !== "undefined") {
   supabase.auth.getSession().then(({ data }) => {
     cachedSession = toSession(data.session);
+    ready = true;
     emitAuthChange();
   });
   supabase.auth.onAuthStateChange((_event, session) => {
     cachedSession = toSession(session);
+    ready = true;
     emitAuthChange();
   });
 }
 
 export function getSession(): Session | null {
   return cachedSession;
+}
+
+/**
+ * 아직 Supabase로부터 한 번도 응답을 못 받은 상태(모듈이 막 로드됐거나, 리다이렉트 직후
+ * onAuthStateChange가 아직 도착하지 않은 순간)인지. false를 "로그아웃"으로 오인하면 안 되는
+ * 곳(마이페이지 초기 화면 등)에서 쓴다.
+ */
+export function isAuthReady(): boolean {
+  return ready;
 }
 
 export function logout() {

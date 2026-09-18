@@ -3155,3 +3155,147 @@ curl -s localhost:3000/backend/health
     이 부분만은 "크래시 안 함"까지만 확인했고 "실제로 로그인이 된다"는 확인하지 못했습니다.
   - **승현님**: `next.config.ts` 리라이트 머지 후 Vercel `NEXT_PUBLIC_API_BASE_URL`을
     `/backend`로 교체(순서 중요, 먼저 바꾸면 404).
+
+---
+
+## [2026-09-18 14:20] 프론트팀 — 외부 검수 리포트 37건 중 A~E 반영 (로그인 유지 실패 / 이전 코스 재노출 / 실패를 성공처럼 표시 / 가짜 이메일 / 타임아웃 미적용)
+
+외부 검수에서 나온 37건 중 심사 동선에 직접 영향을 주는 A~E를 지시받은 순서대로 반영했습니다.
+
+### A — 로그인해도 로그인 유도가 계속 뜬다
+
+**원인 1 (가장 치명적)**: `result/page.tsx`의 리다이렉트 복귀 처리가
+
+```js
+if (url.search || url.hash) {
+  window.history.replaceState(null, "", url.pathname);
+}
+```
+
+로 해시를 먼저 지웠습니다. implicit 플로우는 `#access_token` 해시로 토큰을 받고
+supabase-js가 `detectSessionInUrl`로 그 해시를 **비동기로** 파싱해 세션을 만드는데, 이
+코드가 해시를 먼저 지워버려 로그인이 아예 성립하지 않았습니다 — 로그인 후에도 배너·모달이
+계속 뜨던 증상의 진짜 원인이었습니다. **해시는 이제 절대 건드리지 않습니다.** 지우는 건
+Google 동의 화면 취소 시 붙는 `error` 계열 쿼리스트링뿐이고, `hadOAuthError` 판정을 먼저
+끝낸 뒤에만 지웁니다.
+
+**원인 2**: `SaveFlowModal`의 재개 effect가 `getSession()`을 한 번만 확인했습니다.
+`getSession()`은 동기 캐시라 리다이렉트 직후엔 Supabase의 `onAuthStateChange`가 아직
+도착 전이라 계속 `null`이었고, deps가 `[open, resumeMode]`뿐이라 세션이 늦게 도착해도
+다시 확인하지 않았습니다. → `subscribeAuthChange`를 구독해 세션이 도착할 때까지 기다리고,
+**10초** 안에 안 오면 재시도 화면으로 전환하도록 고쳤습니다(중복 실행 방지 `settled` 플래그,
+언마운트 시 타이머·구독 정리 포함).
+
+**원인 3**: `mypage/page.tsx`도 세션을 마운트 시 한 번만 읽었습니다. → 아래 공통 훅으로
+교체해 같은 문제를 근본적으로 해결했습니다.
+
+**함께 고친 것**:
+- **리포트 11**: `SaveFlowModal`이 이미 로그인된 사용자에게도 OAuth를 다시 시작하던 문제 —
+  모달이 열릴 때 `getSession()`이 있으면(일반 오픈이든 리다이렉트 복귀 직후든) 로그인 화면을
+  건너뛰고 곧장 저장합니다. `handleGoogleContinue`도 같은 가드를 넣었습니다.
+- **리포트 12**: `resumeMode`가 `useState` 초기값으로만 쓰여 부모가 나중에 "retry"로
+  바꿔도 `step`이 안 바뀌던 문제 — effect 안에서 `resumeMode === "retry"`를 매번 다시
+  확인해 `step`에 반영합니다.
+- **리포트 27**: 인증 시작 실패 후(`mockGoogleLogin()`이 `{ok:false}`) 또는 명시적으로
+  모달을 닫을 때 `pending_save` sessionStorage 플래그가 안 지워지던 문제 — `storage.ts`에
+  `clearPendingSave()`를 추가해 두 경로 모두에서 호출합니다.
+
+**공통 훅**: `app/lib/useAuthSession.ts`(신규) — Header/GuestLoginHint/mypage/
+SaveFlowModal/LoginModal 5곳이 전부 이것만 씁니다. `auth.ts`에 `isAuthReady()`를 추가해
+"세션이 없음"과 "아직 확인 중"을 구분합니다.
+
+**주의(실측으로 직접 잡은 버그)**: 이 훅의 초기 구현은 `useState(() => ({session:
+getSession(), ready: isAuthReady()}))`처럼 **초기값을 즉시 읽는** 방식이었는데, 이게
+**하이드레이션 오류**를 냈습니다 — 클라이언트에서 Supabase의 비동기 `getSession()`이
+서버 렌더보다 먼저(빠른 마이크로태스크 타이밍으로) 끝나버려 서버가 렌더한 HTML과 클라이언트의
+첫 렌더가 달라졌습니다(`mypage`에서 실제로 재현, 콘솔에 `Hydration failed` 확인). 항상
+`{session:null, ready:false}`로 시작하고 실제 값은 마운트 후 `useEffect`에서만 반영하도록
+고쳐서 해결했습니다 — 서버는 클라이언트의 비동기 타이밍을 절대 미리 알 수 없으므로, 초기
+렌더는 항상 서버와 같은 값이어야 합니다.
+
+### B — 새 조건으로 만들어도 이전 코스가 나온다
+
+`result/page.tsx`의 마운트 effect가 `guest_itinerary`(이전 생성 결과)가 있으면 그것부터
+반환하고 끝나, `pending_request`(방금 새로 제출한 요청)를 전혀 확인하지 않았습니다.
+
+`pending`이 있고 `existing.request`와 **다르면** 이전 결과를 무효화(`clearGuestItinerary`)
+하고 새로 생성하도록 고쳤습니다. 같은 조건이면(또는 `pending`이 없으면) 기존 캐시를 그대로
+써서 불필요한 재생성을 피합니다(비교는 `JSON.stringify` — `GenerateRequest`가 평평한
+직렬화 가능 객체라 충분합니다).
+
+### C — 실패를 성공처럼 보여준다
+
+- `mypage/page.tsx`의 `handleDelete`가 `deleteItinerary()` 응답을 확인하지 않고 목록에서
+  지웠습니다 → `res.data`를 확인한 뒤에만 지우고, 실패 시 `DeleteConfirmModal`을 닫지 않은
+  채 에러 메시지 + 재시도 버튼을 보여줍니다(`deleting`/`error` prop 추가).
+- `itinerary/[id]/page.tsx`의 알림 응답이 실패해도 무조건 `clearAlert()`를 호출했습니다 →
+  `res.data`가 있을 때만 적용·`clearAlert()`하고, 실패하면 모달을 열어둔 채
+  `AlertModal`에 인라인 에러(`managing.respondError`)를 보여줍니다(응답을 "no"로 보낸
+  경우처럼 정상적으로 `dismissed`인 것과는 구분 — 실패는 `res.data`가 아예 없는 경우입니다).
+- `mypage/page.tsx`의 `listItineraries()` 실패가 빈 배열로 뭉개져 "저장한 코스 없음"과
+  구분이 안 됐습니다 → `items`를 `배열 | null(로딩) | "error"` 세 상태로 나눠, 로딩 중/
+  실패(재시도 버튼 포함)/진짜 빈 목록을 각각 다른 화면으로 보여줍니다.
+- `itinerary/[id]/page.tsx`의 `getItinerary()` 실패를 전부 `not_found`로 묶었습니다 →
+  `AUTH_REQUIRED`/`NETWORK_ERROR`/그 외(`NOT_FOUND` 포함)를 구분해 각각 "로그인이
+  필요해요"(마이페이지 링크)/"불러오지 못했어요"(재시도 버튼)/기존 "코스를 찾을 수
+  없어요" 화면을 보여줍니다. `NOT_FOUND`를 그대로 두는 이유: API_CONTRACT.md §2가 본인
+  소유가 아닌 리소스도 존재를 노출하지 않기 위해 의도적으로 404로 응답하도록 정해뒀기
+  때문입니다 — "없음"과 "내 것 아님"을 굳이 더 나누지 않습니다.
+
+### D — 존재하지 않는 이메일을 표시한다
+
+`mypage/page.tsx`가 `session.user_id + "@gmail.com"`으로 이메일을 지어내고 있었습니다.
+`auth.ts`의 `Session` 타입에 `email: string | null`을 추가해 실제 Supabase
+`user.email`을 담고, 화면은 `session.email`이 있을 때만 그 줄을 그립니다(없으면 줄
+자체를 생략 — 자리표시자나 빈 문자열을 넣지 않습니다).
+
+### E — 응답 본문 지연에는 타임아웃이 안 걸린다
+
+`api.ts`의 `fetchApi()`가 `fetch()` 직후 `finally`에서 타이머를 해제하고 있었습니다.
+`fetch()`는 **헤더가 도착하는 순간** resolve되고 본문은 별도 스트림으로 읽으므로, 본문
+전송이 멈춘 응답에서는 `res.json()`이 타임아웃을 넘겨도 끝나지 않았습니다 — 앞서 고친
+무한 로딩이 이 경로로 재발할 수 있는 상태였습니다. `fetch()`와 `res.json()`을 하나의
+try에 같이 넣고 `finally`에서 딱 한 번만 타이머를 해제하도록 고쳤습니다.
+
+### 검증 (라이브 — 실 Supabase 자격 증명 없이 가능한 범위)
+
+- `npx tsc --noEmit` / `npx eslint .` / `npm run build` 전부 통과
+- **B**: 게스트 결과(인제)가 캐시된 상태에서 다른 조건(평창)의 `pending_request`를 심고
+  `/result` 진입 → 새 코스(평창)가 정상 생성됨. 같은 조건을 다시 심으면 캐시를 그대로
+  써서 즉시 렌더(재생성 없음) — 둘 다 확인
+- **원인 1**: `pending_save` 플래그 + `#access_token=...` 해시를 직접 심고 `/result`
+  진입 → effect가 `pending_save`는 정상 소비하면서 **해시는 그대로 유지**되는 것을 직접
+  확인(수정 전이었다면 `url.pathname`으로 통째로 지워졌을 자리)
+- **원인 2**: 위 상태에서 실제 세션이 끝내 도착하지 않자(로컬에 Supabase 자격 증명 없음)
+  정확히 약 10초 뒤 재시도 화면("Google 로그인 창이 닫혔어요")으로 전환되고 게스트 코스가
+  그대로 유지되는 것 확인 — 타임아웃 폴백이 실제로 동작
+- **리포트 27**: 인증 시작이 즉시 실패하는 상태(Supabase 미설정)에서 "Google로 계속하기"
+  클릭 → `pending_save`가 바로 지워지는 것 확인
+- **C (itinerary 상세)**: `NEXT_PUBLIC_API_BASE_URL`을 접속 즉시 거부되는 포트로 돌려
+  실제 `NETWORK_ERROR` 경로를 타게 한 뒤 `/itinerary/:id` 진입 → "코스를 불러오지
+  못했어요" + 재시도 화면(기존 "코스를 찾을 수 없어요"와 다른 화면) 확인, 재시도도 같은
+  화면으로 안정적으로 떨어짐 확인. 원래 환경(mock)으로 되돌리면 진짜 없는 id는 여전히
+  "코스를 찾을 수 없어요"로 정상 표시되는 것도 재확인(회귀 없음)
+- **하이드레이션**: 위 "주의" 항목의 버그를 fresh 탭에서 재현·확정 후 수정, 수정 후
+  `/mypage`·`/`·`/care`를 ko/en/zh 여러 fresh 탭에서 콘솔 에러 0건 확인
+- **로그인 실패 폴백**: Supabase 미설정 상태에서 홈 배너·저장 흐름 로그인 시도 — 크래시
+  없이 기존 재시도 화면으로 정상 폴백(회귀 없음)
+
+### 확인 못 한 것
+
+- **실제 Google OAuth 왕복** (동의 화면 → 콜백 → 세션 생성 → 자동 저장 완료 → 배너·헤더
+  갱신, 검증 체크리스트 2~4번)과 **D의 실제 이메일 표시**는 로컬에 Supabase 자격 증명이
+  없어 이번에도 끝까지 확인하지 못했습니다. 원인 1·2를 고친 뒤 그 논리가 정확히 의도대로
+  동작하는 것(해시 보존, 세션 도착 대기, 타임아웃 폴백)은 위처럼 직접 확인했지만, "실제로
+  로그인이 성립해 세션이 만들어지는지"는 실 자격 증명이 있어야만 확인됩니다.
+- **검증 체크리스트 6번(오프라인 삭제)**: `mypage`의 목록/삭제 화면 자체가 로그인 상태를
+  전제로 렌더되어, 로그인 없이는 이 화면에 도달할 수 없습니다. 로직(응답 확인 후에만
+  반영, 실패 시 에러+재시도)은 코드 리뷰로 검증했고 `itinerary/:id`에서 같은 패턴의
+  `NETWORK_ERROR` 경로는 라이브로 확인했지만, 로그인 상태에서의 삭제 실패 자체는 실
+  자격 증명이 필요합니다.
+
+- 블로커: 없음.
+- 다음 액션:
+  - **승현님/QA**: 실 Supabase 자격 증명으로 검증 체크리스트 1~7번 전체를 시크릿 창에서
+    순서대로 확인해주세요. 특히 2~4번(로그인 왕복)과 5번(실제 이메일), 6번(로그인 상태
+    오프라인 삭제)은 이번 세션에서 로직만 검증했고 실제 왕복은 못 봤습니다.

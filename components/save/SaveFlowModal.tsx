@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/Button";
 import { CategoryIcon } from "@/components/icons/CategoryIcon";
 import { pickName, type UiLocale } from "@/app/lib/localized";
 import { formatDateRange } from "@/app/lib/date";
-import { getSession, mockGoogleLogin } from "@/app/lib/auth";
+import { getSession, mockGoogleLogin, subscribeAuthChange } from "@/app/lib/auth";
 import { saveItinerary } from "@/app/lib/api";
-import { markPendingSave } from "@/app/lib/storage";
+import { markPendingSave, clearPendingSave } from "@/app/lib/storage";
 import type { GenerateResponseData, Relationship } from "@/app/lib/types";
+
+const AUTH_ARRIVAL_TIMEOUT_MS = 10000;
 
 type Step = "prompt" | "authorizing" | "retry";
 
@@ -71,23 +73,77 @@ export function SaveFlowModal({
   }
 
   useEffect(() => {
-    if (open && resumeMode === "save" && getSession()) {
-      // 리다이렉트로 돌아와 이미 로그인된 세션(외부 상태)을 반영하는 것이라 렌더 중 파생이 불가능하다.
-      // completeSave는 매 렌더 새로 만들어지므로 deps에 넣지 않는다(무한 재실행 방지).
+    if (!open) return;
+
+    if (resumeMode === "retry") {
+      // 부모가 나중에 resumeMode를 "retry"로 바꿔도(예: 동의 화면 취소 감지가 조금 늦게 온
+      // 경우) step에 반영되도록 초기값뿐 아니라 여기서도 동기화한다(리포트 12).
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStep("retry");
+      return;
+    }
+
+    if (getSession()) {
+      // 이미 로그인돼 있으면(일반 오픈이든 리다이렉트 복귀 직후든) OAuth를 다시 시작하지
+      // 않고 곧장 저장한다 — 세션이 있는데도 로그인 화면을 다시 띄우던 버그(리포트 11).
       setStep("authorizing");
       void completeSave();
+      return;
     }
+
+    if (resumeMode !== "save") return; // 일반 오픈 + 아직 미로그인 → prompt 화면에서 대기
+
+    // resumeMode === "save"인데 세션이 아직 캐시에 없다 — getSession()은 동기 캐시라
+    // 리다이렉트 직후엔 Supabase의 onAuthStateChange가 아직 안 왔을 수 있다(원인 2, 이전에는
+    // 여기서 한 번만 확인하고 끝나 세션이 뒤늦게 도착해도 반영되지 않았다). 도착할 때까지
+    // 구독하고, 일정 시간 넘으면 재시도 화면으로 전환한다.
+    let settled = false;
+    setStep("authorizing");
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      setStep("retry");
+    }, AUTH_ARRIVAL_TIMEOUT_MS);
+    const unsubscribe = subscribeAuthChange(() => {
+      if (settled) return;
+      const session = getSession();
+      if (!session) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      unsubscribe();
+      void completeSave();
+    });
+
+    return () => {
+      settled = true;
+      clearTimeout(timeoutId);
+      unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, resumeMode]);
 
+  function handleClose() {
+    // 인증을 시작하려던 흔적이 남아 있으면 다음 결과 페이지 진입에서 저장 재개가 잘못
+    // 켜질 수 있다(리포트 27) — 명시적으로 닫을 때 지운다.
+    clearPendingSave();
+    onClose();
+  }
+
   async function handleGoogleContinue() {
+    if (getSession()) {
+      // 이미 로그인된 상태에서 눌렸다면(리포트 11과 같은 이유) OAuth를 새로 시작하지 않는다.
+      setStep("authorizing");
+      await completeSave();
+      return;
+    }
     setStep("authorizing");
     // 리다이렉트로 페이지가 이동하기 전에 "저장을 이어가려 했다"는 사실을 남겨둔다 —
     // 돌아온 뒤 result 페이지가 이 값을 보고 로그인 화면 없이 곧장 저장을 재개한다.
     markPendingSave();
     const res = await mockGoogleLogin();
     if (!res.ok) {
+      // 리다이렉트 자체가 시작되지 않았다 — 방금 남긴 pending_save는 무효하니 지운다(리포트 27).
+      clearPendingSave();
       setStep("retry");
       return;
     }
@@ -97,7 +153,7 @@ export function SaveFlowModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
       <div className="p-6">
         <div className="mb-5 rounded-2xl bg-bg-subtler p-4">
           <p className="text-[15px] font-bold tracking-tight">
@@ -122,7 +178,7 @@ export function SaveFlowModal({
         </div>
 
         {step === "retry" ? (
-          <RetryStep stops={totalStops} onRetry={handleGoogleContinue} onContinueWithoutSaving={onClose} />
+          <RetryStep stops={totalStops} onRetry={handleGoogleContinue} onContinueWithoutSaving={handleClose} />
         ) : (
           <>
             <h2 className="whitespace-pre-line text-xl font-bold leading-snug tracking-tight">
@@ -141,7 +197,7 @@ export function SaveFlowModal({
               </Button>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleClose}
                 className="mt-3 w-full py-2 text-center text-[13px] font-semibold text-muted"
               >
                 {t("later")}

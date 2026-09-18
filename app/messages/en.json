@@ -174,7 +174,8 @@
     "expiredToast": "This suggestion has expired",
     "bannerText": "A new suggestion has arrived for your course",
     "bannerAction": "Check it out",
-    "appliedToast": "Changed to {name} · 1 stop updated"
+    "appliedToast": "Changed to {name} · 1 stop updated",
+    "respondError": "Something went wrong. Please try again."
   },
   "edit": {
     "title": "Replace this stop",
@@ -204,6 +205,8 @@
     "deleteBody": "This can't be undone.",
     "deleteConfirm": "Delete",
     "deleteCancel": "Cancel",
+    "deleteError": "Couldn't delete it. Please try again.",
+    "loadError": "Couldn't load your courses.",
     "open": "Open"
   },
   "care": {
@@ -236,6 +239,11 @@
   "notFound": {
     "title": "Course not found",
     "body": "This course doesn't exist or you don't have access to it.",
-    "action": "Back to home"
+    "action": "Back to home",
+    "authRequiredTitle": "Log in required",
+    "authRequiredBody": "Please log in again to view this course.",
+    "authRequiredAction": "Go to log in",
+    "networkErrorTitle": "Couldn't load this course",
+    "networkErrorBody": "Please check your connection and try again."
   }
 }

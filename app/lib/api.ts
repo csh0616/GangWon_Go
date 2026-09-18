@@ -63,6 +63,11 @@ function looksLikeApiResult(value: unknown): value is { data: unknown; error: un
  * 타임아웃·네트워크 오류로 fetch가 reject하거나 res.json()이 파싱 예외를 던지면 그 예외가 호출부
  * (result 페이지의 runGenerate)까지 그대로 올라가 setState를 건너뛰고 loading 상태에 박제됐다.
  * 실패 경로는 전부 계약의 에러 형태({data:null, error:{code,message}})로 수렴시킨다.
+ *
+ * 타이머는 fetch()뿐 아니라 res.json()까지 감싼 뒤 마지막에 한 번만 해제한다(외부 검수 리포트
+ * 04) — fetch()는 응답 헤더가 도착하는 순간 resolve되고 본문은 별도 스트림으로 읽는다.
+ * 예전처럼 fetch() 직후 finally에서 타이머를 지우면, 본문 전송이 멈춘 응답에서
+ * res.json()이 제한 시간을 넘겨도 끝나지 않는다 — 앞서 고친 무한 로딩이 이 경로로 재발한다.
  */
 async function fetchApi<T>(
   url: string,
@@ -72,29 +77,32 @@ async function fetchApi<T>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  let res: Response;
   try {
-    res = await fetch(url, { ...init, signal: controller.signal });
-  } catch {
-    // fetch 자체가 reject — 네트워크 단절, CORS 차단, AbortController 타임아웃 전부 여기로 모인다
-    return networkError();
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: controller.signal });
+    } catch {
+      // fetch 자체가 reject — 네트워크 단절, CORS 차단, 헤더 수신 전 타임아웃 전부 여기로 모인다
+      return networkError();
+    }
+
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      // res.ok가 false인데 본문이 JSON이 아닌 경우(502 게이트웨이 HTML 등)와, 본문 수신 중
+      // 타임아웃으로 abort되는 경우(리포트 04) 둘 다 여기로 모인다
+      return networkError("서버 응답을 처리하지 못했어요.");
+    }
+
+    if (!looksLikeApiResult(body)) {
+      return networkError("서버 응답 형식이 올바르지 않아요.");
+    }
+
+    return body as ApiResult<T>;
   } finally {
     clearTimeout(timeoutId);
   }
-
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    // res.ok가 false인데 본문이 JSON이 아닌 경우(502 게이트웨이 HTML 등) 포함
-    return networkError("서버 응답을 처리하지 못했어요.");
-  }
-
-  if (!looksLikeApiResult(body)) {
-    return networkError("서버 응답 형식이 올바르지 않아요.");
-  }
-
-  return body as ApiResult<T>;
 }
 
 // ── 1. 코스 생성 (게스트 가능) ──────────────────────────────────────

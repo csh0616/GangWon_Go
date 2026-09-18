@@ -174,7 +174,8 @@
     "expiredToast": "这条建议已经过期了",
     "bannerText": "您的行程收到了新的建议",
     "bannerAction": "查看详情",
-    "appliedToast": "已更换为{name} · 仅更新了1个地点"
+    "appliedToast": "已更换为{name} · 仅更新了1个地点",
+    "respondError": "出了点问题，请重试。"
   },
   "edit": {
     "title": "更换这个地点",
@@ -204,6 +205,8 @@
     "deleteBody": "删除后无法恢复。",
     "deleteConfirm": "删除",
     "deleteCancel": "取消",
+    "deleteError": "删除失败，请重试。",
+    "loadError": "未能加载您的行程。",
     "open": "打开"
   },
   "care": {
@@ -236,6 +239,11 @@
   "notFound": {
     "title": "未找到该行程",
     "body": "该行程不存在，或您没有查看权限。",
-    "action": "返回首页"
+    "action": "返回首页",
+    "authRequiredTitle": "需要登录",
+    "authRequiredBody": "请重新登录以查看此行程。",
+    "authRequiredAction": "前往登录",
+    "networkErrorTitle": "未能加载该行程",
+    "networkErrorBody": "请检查网络连接后重试。"
   }
 }

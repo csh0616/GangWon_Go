@@ -174,7 +174,8 @@
     "expiredToast": "시간이 지난 제안입니다",
     "bannerText": "코스에 제안이 도착했어요",
     "bannerAction": "확인하기",
-    "appliedToast": "{name}으로 바꿨어요 · 1곳만 변경"
+    "appliedToast": "{name}으로 바꿨어요 · 1곳만 변경",
+    "respondError": "문제가 발생했어요. 다시 시도해주세요."
   },
   "edit": {
     "title": "이 장소 바꾸기",
@@ -204,6 +205,8 @@
     "deleteBody": "삭제하면 되돌릴 수 없어요.",
     "deleteConfirm": "삭제",
     "deleteCancel": "취소",
+    "deleteError": "삭제하지 못했어요. 다시 시도해주세요.",
+    "loadError": "코스를 불러오지 못했어요.",
     "open": "열기"
   },
   "care": {
@@ -236,6 +239,11 @@
   "notFound": {
     "title": "코스를 찾을 수 없어요",
     "body": "이 코스는 존재하지 않거나 접근 권한이 없어요.",
-    "action": "홈으로 돌아가기"
+    "action": "홈으로 돌아가기",
+    "authRequiredTitle": "로그인이 필요해요",
+    "authRequiredBody": "이 코스를 보려면 다시 로그인해주세요.",
+    "authRequiredAction": "로그인하러 가기",
+    "networkErrorTitle": "코스를 불러오지 못했어요",
+    "networkErrorBody": "네트워크 연결을 확인하고 다시 시도해주세요."
   }
 }
