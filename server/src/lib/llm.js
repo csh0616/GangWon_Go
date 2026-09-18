@@ -158,6 +158,19 @@ function emptyLocalized() {
   return { ko: null, en: null, zh: null };
 }
 
+// P0(라운드9, 리포트30) — tool_choice 스키마는 모델에게 "ko/en/zh는 string|null"이라고 지시할
+// 뿐 API 서버가 강제하는 게 아니다. 지금까지는 narration/region_reason 객체가 "존재하는지"만
+// 확인했지, 그 안의 ko/en/zh 각 값이 실제로 문자열인지는 보지 않았다 — 모델이 객체/숫자/배열
+// 같은 걸 넣어도 그대로 API 응답에 실려 텍스트를 렌더링하는 프론트에서 예외가 날 수 있었다.
+// (blurb 쪽은 이미 truncateBlurb가 `typeof text !== 'string'`을 걸러 왔으므로 안전 — 여기 새로
+// 추가하는 건 narration/region_reason에만 없던 동일한 방어다.) 전체를 실패로 만들지 않고
+// 부적합한 필드 하나만 null로 떨어뜨린다 — narration/blurb는 부가 기능이라 없어도 코스는 정상.
+function sanitizeLocalized(obj) {
+  if (!obj || typeof obj !== 'object') return emptyLocalized();
+  const asStringOrNull = (v) => (typeof v === 'string' ? v : null);
+  return { ko: asStringOrNull(obj.ko), en: asStringOrNull(obj.en), zh: asStringOrNull(obj.zh) };
+}
+
 async function callNarrationOnly({ regionInstruction, regionCodes, stopLines }) {
   const prompt =
     `다음은 완성된 여행 코스다 (시군: ${regionCodes.join(', ')}).\n\n${regionInstruction}\n\n` +
@@ -232,8 +245,8 @@ async function generateNarrationBundle({ days, isAutoRegion, regionCodes }) {
   const blurbsByPoiId = new Map();
   blurbChunkMaps.forEach((chunkMap) => chunkMap.forEach((v, k) => blurbsByPoiId.set(k, v)));
 
-  const narration = narrationResult?.narration || emptyLocalized();
-  const regionReason = isAutoRegion ? narrationResult?.region_reason || emptyLocalized() : null;
+  const narration = sanitizeLocalized(narrationResult?.narration);
+  const regionReason = isAutoRegion ? sanitizeLocalized(narrationResult?.region_reason) : null;
 
   return { narration, regionReason, blurbsByPoiId };
 }
