@@ -1,24 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { UserRound } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import { getSession, subscribeAuthChange } from "@/app/lib/auth";
+import { useAuthSession } from "@/app/lib/useAuthSession";
 import { LangSwitcher } from "./LangSwitcher";
 
 export function Header({ showCareLink = true }: { showCareLink?: boolean }) {
   const t = useTranslations("common");
   const tmy = useTranslations("mypage");
-  const [loggedIn, setLoggedIn] = useState(false);
-
-  const refresh = useCallback(() => setLoggedIn(Boolean(getSession())), []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
-    return subscribeAuthChange(refresh);
-  }, [refresh]);
+  const { session } = useAuthSession();
+  const loggedIn = Boolean(session);
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between px-5 md:h-16 md:px-8">

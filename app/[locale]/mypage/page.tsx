@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { LogOut, Mail } from "lucide-react";
 import { useRouter } from "@/i18n/navigation";
@@ -8,7 +8,8 @@ import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/Button";
 import { ItineraryListItem } from "@/components/mypage/ItineraryListItem";
 import { DeleteConfirmModal } from "@/components/mypage/DeleteConfirmModal";
-import { getSession, mockGoogleLogin, logout, type Session } from "@/app/lib/auth";
+import { mockGoogleLogin, logout } from "@/app/lib/auth";
+import { useAuthSession } from "@/app/lib/useAuthSession";
 import { listItineraries, deleteItinerary } from "@/app/lib/api";
 import { todayYmd } from "@/app/lib/date";
 import type { SavedItinerarySummary } from "@/app/lib/types";
@@ -18,43 +19,54 @@ export default function MyPage() {
   const tc = useTranslations("common");
   const router = useRouter();
 
-  const [session, setSession] = useState<Session | null | "checking">("checking");
-  const [items, setItems] = useState<SavedItinerarySummary[] | null>(null);
+  const { session, ready } = useAuthSession();
+  // null = 로딩 중, "error" = 조회 실패(빈 배열과 구분해야 함 — 리포트 05/20), 배열 = 성공
+  const [items, setItems] = useState<SavedItinerarySummary[] | null | "error">(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const [target, setTarget] = useState<SavedItinerarySummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(false);
 
-  useEffect(() => {
-    // sessionStorage는 SSR에 없으므로 마운트 후 클라이언트에서만 읽어 하이드레이션한다
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSession(getSession());
+  const fetchItems = useCallback(() => {
+    setItems(null);
+    listItineraries().then((res) => setItems(res.data ? res.data.itineraries : "error"));
   }, []);
 
   useEffect(() => {
-    if (session && session !== "checking") {
-      listItineraries().then((res) => setItems(res.data?.itineraries ?? []));
-    }
-  }, [session]);
+    // session(외부 상태)이 도착하거나 바뀔 때 다시 조회하는 것이라 렌더 중 파생이 불가능하다
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (session) fetchItems();
+  }, [session, fetchItems]);
 
   async function handleLogin() {
     setLoggingIn(true);
-    const res = await mockGoogleLogin();
+    await mockGoogleLogin();
+    // 실제 Google 로그인은 리다이렉트라 이 줄까지 정상적으로 오면 리다이렉트가 시작되지
+    // 않은 것이다 — useAuthSession이 세션 도착을 계속 지켜보므로 여기서 더 할 일은 없다.
     setLoggingIn(false);
-    if (res.ok) setSession(res.session);
   }
 
   function handleLogout() {
     logout();
-    setSession(null);
     setItems(null);
   }
 
   async function handleDelete(id: string) {
-    await deleteItinerary(id);
-    setItems((prev) => prev?.filter((it) => it.id !== id) ?? null);
+    setDeleting(true);
+    const res = await deleteItinerary(id);
+    setDeleting(false);
+    if (!res.data) {
+      // 성공 여부를 확인하지 않고 목록에서 지우면 실패를 성공처럼 보여주게 된다(리포트 05) —
+      // 모달은 열어둔 채로 실패를 알리고 다시 시도하게 한다.
+      setDeleteError(true);
+      return;
+    }
+    setDeleteError(false);
+    setItems((prev) => (Array.isArray(prev) ? prev.filter((it) => it.id !== id) : prev));
     setTarget(null);
   }
 
-  if (session === "checking") return null;
+  if (!ready) return null;
 
   if (!session) {
     return (
@@ -73,8 +85,11 @@ export default function MyPage() {
   }
 
   const today = todayYmd();
-  const active = (items ?? []).filter((it) => it.end_date >= today);
-  const past = (items ?? []).filter((it) => it.end_date < today);
+  // items가 null(로딩)/"error"(실패)일 때도 안전하게 빈 목록으로 다룬다 — 로딩/에러 표시는
+  // 아래 JSX에서 items 자체를 보고 따로 분기한다.
+  const itemsList = Array.isArray(items) ? items : [];
+  const active = itemsList.filter((it) => it.end_date >= today);
+  const past = itemsList.filter((it) => it.end_date < today);
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -87,7 +102,9 @@ export default function MyPage() {
             <Mail size={17} className="text-ink-soft" strokeWidth={1.6} />
           </span>
           <div className="min-w-0 flex-grow">
-            <p className="truncate text-[14px] font-bold">{session.user_id}@gmail.com</p>
+            {/* user_id에 "@gmail.com"을 붙여 지어낸 가짜 이메일을 보여주던 버그(리포트 23) —
+                실제 세션의 이메일이 있을 때만 표시하고, 없으면 이 줄 자체를 생략한다. */}
+            {session.email && <p className="truncate text-[14px] font-bold">{session.email}</p>}
             <p className="text-[12px] text-muted">{t("loggedInWithGoogle")}</p>
           </div>
         </div>
@@ -95,9 +112,18 @@ export default function MyPage() {
         <section className="mt-7">
           <div className="mb-1 flex items-baseline gap-2">
             <h2 className="text-base font-bold">{t("savedCourses")}</h2>
-            <span className="text-[12.5px] font-medium text-muted">{active.length}</span>
+            {Array.isArray(items) && <span className="text-[12.5px] font-medium text-muted">{active.length}</span>}
           </div>
-          {active.length === 0 ? (
+          {items === null ? (
+            <p className="py-4 text-[13px] text-muted">{tc("loading")}</p>
+          ) : items === "error" ? (
+            <div className="flex flex-col items-center gap-2 py-6 text-center">
+              <p className="text-[13px] text-muted">{t("loadError")}</p>
+              <button type="button" onClick={fetchItems} className="text-[12.5px] font-bold text-brand">
+                {tc("retry")}
+              </button>
+            </div>
+          ) : active.length === 0 ? (
             <p className="py-4 text-[13px] text-muted">{t("empty")}</p>
           ) : (
             <div className="divide-y divide-bg-subtle">
@@ -146,7 +172,12 @@ export default function MyPage() {
       {target && (
         <DeleteConfirmModal
           item={target}
-          onCancel={() => setTarget(null)}
+          deleting={deleting}
+          error={deleteError}
+          onCancel={() => {
+            setTarget(null);
+            setDeleteError(false);
+          }}
           onConfirm={() => handleDelete(target.id)}
         />
       )}

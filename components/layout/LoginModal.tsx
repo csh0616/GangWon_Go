@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { mockGoogleLogin } from "@/app/lib/auth";
+import { useAuthSession } from "@/app/lib/useAuthSession";
 
 type Step = "prompt" | "authorizing" | "retry";
 
@@ -24,9 +25,21 @@ export function LoginModal({
 }) {
   const t = useTranslations("save");
   const tc = useTranslations("common");
+  const { session } = useAuthSession();
   const [step, setStep] = useState<Step>("prompt");
 
+  // 이미 로그인돼 있는 상태로 열렸거나(리포트 11과 같은 원칙), 리다이렉트로 돌아온 뒤
+  // 세션이 뒤늦게 도착하면(원인 2와 같은 원칙) OAuth를 다시 시작하지 않고 곧장 닫는다.
+  useEffect(() => {
+    if (open && session) onLoggedIn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, session]);
+
   async function handleGoogleContinue() {
+    if (session) {
+      onLoggedIn();
+      return;
+    }
     setStep("authorizing");
     const res = await mockGoogleLogin();
     if (!res.ok) {

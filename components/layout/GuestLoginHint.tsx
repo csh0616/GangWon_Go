@@ -1,27 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronRight } from "lucide-react";
-import { getSession, subscribeAuthChange } from "@/app/lib/auth";
+import { useAuthSession } from "@/app/lib/useAuthSession";
 import { LoginModal } from "./LoginModal";
 
 /** design/artboards/Main.dc.html 상단 배너 — 로그인 전(게스트)일 때만 노출 */
 export function GuestLoginHint() {
   const t = useTranslations("common");
+  const { session } = useAuthSession();
   const [loggedIn, setLoggedIn] = useState(true); // 서버/클라 불일치 깜빡임 방지: 기본은 숨김
   const [modalOpen, setModalOpen] = useState(false);
 
-  const refresh = useCallback(() => {
-    // sessionStorage는 SSR에 없으므로 클라이언트에서만 읽는다
-    setLoggedIn(Boolean(getSession()));
-  }, []);
-
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
-    return subscribeAuthChange(refresh);
-  }, [refresh]);
+    setLoggedIn(Boolean(session));
+  }, [session]);
 
   if (loggedIn) return null;
 

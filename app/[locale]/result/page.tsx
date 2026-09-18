@@ -118,12 +118,24 @@ export default function GuestResultPage() {
   useEffect(() => {
     // sessionStorage는 SSR에 없으므로 마운트 후 클라이언트에서만 읽어 하이드레이션한다
     const existing = loadGuestItinerary();
-    if (existing) {
+    const pending = loadPendingRequest();
+
+    // MainForm에서 조건을 바꿔 새로 제출하면 pending_request는 새 값으로 덮어써지지만
+    // guest_itinerary는 이전 생성 결과가 그대로 남아 있다 — existing만 보고 먼저 반환하면
+    // 조건을 바꿔도 이전 코스가 계속 나온다(외부 검수 리포트 01). pending이 존재하고
+    // existing.request와 다르면 이전 결과를 무효화하고 새로 생성한다. 같은 조건이면(또는
+    // pending이 없으면) 기존 캐시를 그대로 쓴다 — 재생성 낭비를 피한다.
+    if (existing && pending && JSON.stringify(existing.request) !== JSON.stringify(pending)) {
+      clearGuestItinerary();
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      runGenerate(pending);
+      return;
+    }
+
+    if (existing) {
       setState({ kind: "ready", request: existing.request, result: existing.response });
       return;
     }
-    const pending = loadPendingRequest();
     if (!pending) {
       router.replace("/");
       return;
@@ -139,12 +151,18 @@ export default function GuestResultPage() {
     if (state.kind !== "ready") return;
     if (!consumePendingSave()) return;
 
-    // Google 동의 화면에서 취소하면 Supabase가 redirectTo에 error 계열 쿼리스트링(또는 해시)을
-    // 붙여 돌려보낸다 — implicit 플로우 클라이언트가 처리하고 남긴 잔여값이므로 확인 후 지운다.
+    // implicit 플로우는 #access_token 해시로 토큰을 받고, supabase-js가 detectSessionInUrl로
+    // 그 해시를 비동기로 파싱해 세션을 만든다. 여기서 해시를 먼저 지워버리면(예전에 실제로
+    // 그랬다) 로그인이 아예 성립하지 않는다 — 로그인 후에도 배너·모달이 계속 뜨던 버그의
+    // 원인 1이었다. 해시는 절대 건드리지 않는다. 지울 것은 Google 동의 화면 취소 시 붙는
+    // error 계열 "쿼리스트링"뿐이며, hadOAuthError 판정을 먼저 끝낸 뒤에 지운다.
     const url = new URL(window.location.href);
-    const hadOAuthError = url.searchParams.has("error") || window.location.hash.includes("error=");
-    if (url.search || url.hash) {
-      window.history.replaceState(null, "", url.pathname);
+    const hadOAuthError = url.searchParams.has("error");
+    if (hadOAuthError) {
+      url.searchParams.delete("error");
+      url.searchParams.delete("error_code");
+      url.searchParams.delete("error_description");
+      window.history.replaceState(null, "", url.pathname + url.search + window.location.hash);
     }
 
     // sessionStorage/URL(외부 상태)에서 되돌아온 것을 반영하는 것이라 렌더 중 파생이 불가능하다

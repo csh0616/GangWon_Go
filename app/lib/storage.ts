@@ -164,3 +164,17 @@ export function consumePendingSave(): boolean {
     return false;
   }
 }
+
+/**
+ * 인증 시작 실패 후 모달을 닫거나(취소), 리다이렉트 자체가 안 일어난 경우 이 플래그가
+ * sessionStorage에 남아 다음 결과 페이지 진입에서 저장 재개가 잘못 켜질 수 있다(리포트 27).
+ * 명시적으로 닫힐 때 호출한다.
+ */
+export function clearPendingSave() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(PENDING_SAVE_KEY);
+  } catch {
+    // no-op
+  }
+}

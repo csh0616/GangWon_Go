@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
+import { Link } from "@/i18n/navigation";
 import { Header } from "@/components/layout/Header";
 import { ResultView } from "@/components/result/ResultView";
 import { AlertModal } from "@/components/managing/AlertModal";
@@ -17,30 +18,53 @@ import { pickName, type UiLocale } from "@/app/lib/localized";
 import type { RegionCode, SavedItineraryDetail, Stop } from "@/app/lib/types";
 
 type EditTarget = { day: number; date: string; ordinal: number; stop: Stop; region: RegionCode };
+// 인증 오류(세션 만료 등)·네트워크 오류·진짜 "없음"을 한 화면으로 뭉치면 안 된다(외부 검수
+// 리포트 05/20) — 서버는 본인 소유가 아닌 리소스도 존재를 노출하지 않으려 404로 응답하므로
+// (API_CONTRACT.md §2) NOT_FOUND는 원래도 "없거나 내 것이 아님"을 함께 뜻한다. 여기선 그 외의
+// 원인(인증 필요·네트워크 실패)만 따로 구분한다.
+type DetailState = SavedItineraryDetail | "loading" | "not_found" | "auth_required" | "network_error";
 
 export default function ItineraryPage() {
   const { id } = useParams<{ id: string }>();
   const t = useTranslations("notFound");
+  const tc = useTranslations("common");
   const tm = useTranslations("managing");
   const locale = useLocale() as UiLocale;
   const { setWatchedId, pendingAlert, clearAlert } = useWatch();
 
-  const [detail, setDetail] = useState<SavedItineraryDetail | "loading" | "not_found">("loading");
+  const [detail, setDetail] = useState<DetailState>("loading");
   const [showToast, setShowToast] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [changedStopId, setChangedStopId] = useState<string | null>(null);
   const [expiredToast, setExpiredToast] = useState(false);
   const [appliedName, setAppliedName] = useState<string | null>(null);
+  const [alertError, setAlertError] = useState(false);
+
+  function fetchDetail() {
+    setDetail("loading");
+    getItinerary(id).then((res) => {
+      if (res.data) {
+        setDetail(res.data);
+        return;
+      }
+      if (res.error.code === "AUTH_REQUIRED") {
+        setDetail("auth_required");
+      } else if (res.error.code === "NETWORK_ERROR") {
+        setDetail("network_error");
+      } else {
+        setDetail("not_found");
+      }
+    });
+  }
 
   useEffect(() => {
     setWatchedId(id);
-    getItinerary(id).then((res) => {
-      setDetail(res.data ?? "not_found");
-    });
+    // id 파라미터(외부 상태)가 바뀔 때마다 새로 조회하는 것이라 렌더 중 파생이 불가능하다
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchDetail();
     if (consumeJustSaved(id)) {
       // sessionStorage 플래그는 SSR에 없으므로 마운트 후에만 확인 가능
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowToast(true);
       setNotifyOpen(true);
     }
@@ -50,7 +74,7 @@ export default function ItineraryPage() {
   // 개발 전용 테스트 훅 — PRD 3.5절: 강제 트리거는 UI 버튼이 아니라 API 직접 호출로만 검증한다
   // (TEST_PLAN.md T-003/T-007/T-008). 실서비스 빌드에는 포함되지 않는다.
   useEffect(() => {
-    if (process.env.NODE_ENV !== "development" || detail === "loading" || detail === "not_found") return;
+    if (process.env.NODE_ENV !== "development" || typeof detail === "string") return;
     const firstDay = detail.itinerary_json.days.find((d) => d.stops.length > 0);
     const firstStop = firstDay?.stops[0];
     if (!firstDay || !firstStop) return;
@@ -58,6 +82,12 @@ export default function ItineraryPage() {
       triggerAlert(id, firstDay.day, firstStop.poi_id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail]);
+
+  useEffect(() => {
+    // 이전 제안에서 실패했던 에러 표시가 새로 도착한 제안까지 이어 붙지 않게 한다
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAlertError(false);
+  }, [pendingAlert?.alert_id]);
 
   if (detail === "loading") return null;
 
@@ -68,6 +98,36 @@ export default function ItineraryPage() {
         <div className="flex flex-grow flex-col items-center justify-center px-5 text-center">
           <h1 className="text-xl font-bold">{t("title")}</h1>
           <p className="mt-2 text-sm text-muted">{t("body")}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (detail === "auth_required") {
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <Header />
+        <div className="flex flex-grow flex-col items-center justify-center gap-4 px-5 text-center">
+          <h1 className="text-xl font-bold">{t("authRequiredTitle")}</h1>
+          <p className="text-sm text-muted">{t("authRequiredBody")}</p>
+          <Link href="/mypage" className="text-[13px] font-bold text-brand">
+            {t("authRequiredAction")}
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (detail === "network_error") {
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <Header />
+        <div className="flex flex-grow flex-col items-center justify-center gap-4 px-5 text-center">
+          <h1 className="text-xl font-bold">{t("networkErrorTitle")}</h1>
+          <p className="text-sm text-muted">{t("networkErrorBody")}</p>
+          <button type="button" onClick={fetchDetail} className="text-[13px] font-bold text-brand">
+            {tc("retry")}
+          </button>
         </div>
       </div>
     );
@@ -112,17 +172,26 @@ export default function ItineraryPage() {
         <AlertModal
           alert={pendingAlert}
           itineraryJson={detail.itinerary_json}
+          error={alertError}
           onExpired={() => {
             clearAlert();
+            setAlertError(false);
             setExpiredToast(true);
             setTimeout(() => setExpiredToast(false), 3000);
           }}
           onRespond={async (response) => {
+            setAlertError(false);
             const res = await respondAlert(pendingAlert.alert_id, response);
-            if (res.data?.status === "confirmed" && res.data.updated_stop) {
+            if (!res.data) {
+              // 응답 자체가 실패하면(네트워크 등) 성공한 것처럼 모달을 닫지 않는다(리포트 05) —
+              // 사용자의 Yes/No 응답이 서버에 반영됐는지 모르는 채로 조용히 사라지면 안 된다.
+              setAlertError(true);
+              return;
+            }
+            if (res.data.status === "confirmed" && res.data.updated_stop) {
               const newPoiId = res.data.updated_stop.poi_id;
               setDetail((prev) => {
-                if (!prev || prev === "loading" || prev === "not_found") return prev;
+                if (typeof prev === "string") return prev;
                 const candidate = pendingAlert.proposed_stop.candidate_poi;
                 return {
                   ...prev,
@@ -158,6 +227,7 @@ export default function ItineraryPage() {
               setAppliedName(pickName(pendingAlert.proposed_stop.candidate_poi.name, locale).primary);
               setTimeout(() => setAppliedName(null), 5000);
             }
+            setAlertError(false);
             clearAlert();
           }}
         />
