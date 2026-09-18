@@ -234,14 +234,17 @@ export function ResultView({
 
   return (
     <div className="relative h-[calc(100dvh-56px)] overflow-hidden md:h-[calc(100dvh-64px)]">
-      {/* 지도 (모바일: 배경 전체 / 데스크톱: 우측 패널) */}
-      <div className="absolute inset-0 md:left-[480px]">
+      {/* 지도 (모바일: 배경 전체 / 데스크톱: 우측 패널) — 카카오맵 SDK가 내부 레이어에
+          명시적 양수 z-index를 붙여서, isolate 없이는 DOM 순서상 뒤에 오는 형제 요소(바텀시트 등,
+          z-index: auto)보다도 위에 그려진다. isolate로 새 스택 컨텍스트를 만들어 그 z-index가
+          바깥으로 새지 않게 가둔다 */}
+      <div className="absolute inset-0 isolate md:left-[480px]">
         <MapView day={activeDay} onMyLocationChange={setHasMyLocation} />
       </div>
 
       {/* DAY 전환 — 지도가 어느 날짜를 보여주는지 표시하고 좌우로 넘길 수 있다 */}
       {dayCount > 1 && (
-        <div className="absolute left-6 top-6 flex items-center gap-1 rounded-2xl bg-bg py-1.5 pl-2 pr-1.5 shadow-lg md:left-[504px]">
+        <div className="absolute left-6 top-6 z-20 flex items-center gap-1 rounded-2xl bg-bg py-1.5 pl-2 pr-1.5 shadow-lg md:left-[504px]">
           <button
             type="button"
             aria-label="previous day"
@@ -270,7 +273,7 @@ export function ResultView({
       )}
 
       {hasMyLocation && (
-        <div className="absolute left-6 bottom-6 hidden items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:left-[504px] md:flex">
+        <div className="absolute left-6 bottom-6 z-20 hidden items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:left-[504px] md:flex">
           <MapPin size={13} className="text-brand" />
           <span className="text-[13px] font-medium text-muted">{tc("myLocation")}</span>
         </div>
@@ -286,10 +289,12 @@ export function ResultView({
         {footer}
       </div>
 
-      {/* 모바일 바텀시트 */}
+      {/* 모바일 바텀시트 — z-20: 지도 래퍼는 isolate로 갇혀 있어 원래도 auto(0)로 비교되지만,
+          지도 위에 뜨는 다른 요소들과 동일한 z 계층(지도 0 / 오버레이 20 / 시트 20 / 배너 30 /
+          모달 40, AlertBanner.tsx·Dialog.tsx 참고)을 명시적으로 맞춘다 */}
       <div
         className={
-          "absolute inset-x-0 bottom-0 flex flex-col rounded-t-[20px] bg-bg shadow-[0_-6px_28px_rgba(25,31,40,.12)] transition-[height] duration-300 md:hidden " +
+          "absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-[20px] bg-bg shadow-[0_-6px_28px_rgba(25,31,40,.12)] transition-[height] duration-300 md:hidden " +
           (expanded ? "h-full rounded-none" : "h-[62%]")
         }
       >
