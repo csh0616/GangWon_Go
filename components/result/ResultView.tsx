@@ -22,7 +22,9 @@ import type {
   SelectedRegions,
 } from "@/app/lib/types";
 
-export type SavedStatus = "unsaved" | "saved" | "watching";
+// "cancelled" — 마이페이지에서 삭제한 코스(리포트 31). 삭제 후에도 직접 URL로 들어오면
+// 여전히 매니징 중인 것처럼 보이던 버그의 수정 대상.
+export type SavedStatus = "unsaved" | "saved" | "watching" | "cancelled";
 
 export type ResultViewProps = {
   itineraryJson: ItineraryJson;
@@ -181,7 +183,13 @@ export function ResultView({
       <MetaChip className="hidden md:flex">{t("stops", { count: stopCount })}</MetaChip>
       <span className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-full bg-bg-subtle px-2.5 text-[12.5px] font-bold text-ink-soft md:h-8 md:px-[11px] md:text-[13px]">
         <Clock3 size={12} className="text-muted" strokeWidth={1.4} />
-        {status === "unsaved" ? t("notSaved") : status === "watching" ? t("watching") : t("saved")}
+        {status === "unsaved"
+          ? t("notSaved")
+          : status === "watching"
+            ? t("watching")
+            : status === "cancelled"
+              ? t("deleted")
+              : t("saved")}
       </span>
     </div>
   );
@@ -216,6 +224,11 @@ export function ResultView({
     <div className="border-t border-bg-subtle px-5 py-4 md:px-8">
       <p className="text-[12.5px] font-semibold text-ink-soft">{t("watchingTitle")}</p>
       <p className="mt-0.5 text-[12px] text-muted">{t("watchingSubtitle")}</p>
+    </div>
+  ) : status === "cancelled" ? (
+    <div className="border-t border-bg-subtle px-5 py-4 md:px-8">
+      <p className="text-[12.5px] font-semibold text-danger">{t("deletedTitle")}</p>
+      <p className="mt-0.5 text-[12px] text-muted">{t("deletedSubtitle")}</p>
     </div>
   ) : null;
 

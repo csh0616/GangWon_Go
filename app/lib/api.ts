@@ -30,10 +30,20 @@ import {
 import { buildMockAlert } from "./mock/alerts";
 import { mockRegenerateCandidates } from "./mock/regenerate";
 import { getSession } from "./auth";
-import { publishAlert, subscribeAlerts } from "./mock/realtime";
+import { publishAlert, subscribeAlerts as mockSubscribeAlerts } from "./mock/realtime";
+import { subscribeAlerts as realSubscribeAlerts } from "./realtime";
 import { getSessionSaved, listSessionSaved, putSessionSaved } from "./mock/sessionSavedStore";
 
-export { subscribeAlerts };
+/**
+ * USE_MOCK일 때는(로컬에 실 백엔드가 없을 때) mock/realtime.ts의 인메모리 pub/sub을 그대로
+ * 쓴다 — triggerAlert()의 목업 분기가 이걸로 publish한다(아래). 실 백엔드가 붙으면 실제
+ * Supabase Realtime 채널을 구독한다(리포트 03, app/lib/realtime.ts). 호출부
+ * (components/managing/WatchContext.tsx)는 이 분기와 무관하게 그대로 둔다.
+ */
+export function subscribeAlerts(itineraryId: string, listener: (payload: AlertPayload) => void): () => void {
+  if (USE_MOCK) return mockSubscribeAlerts(itineraryId, listener);
+  return realSubscribeAlerts(itineraryId, listener);
+}
 
 // 실제 백엔드가 붙으면 이 값만 채우면 됨 (PRD 3장 — 프론트 Vercel / 백엔드 Railway 또는 Render)
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? null;

@@ -36,11 +36,34 @@ export function MainForm() {
   const regionMissing = !effectiveAutoMode && selectedRegions.length === 0;
   const relationshipMissing = relationship === null;
   const tooMany = !effectiveAutoMode && selectedRegions.length > dayCount;
-  // API_CONTRACT.md §0.1 — 여행 기간 상한 10일 초과는 400 INVALID_STRUCTURED_INPUT.
-  // 종료일 input의 max로도 애초에 못 고르게 막지만(DateRangeField), 방어적으로 한 번 더 검증.
-  const tooLong = dayCount > 10;
+
+  // 날짜 검증 (외부 검수 리포트 17) — DateRangeField의 min/max는 피커에서 애초에 못 고르게
+  // 막는 소프트 가드일 뿐이다(P0 날짜 피커 수정 때 "max 하나만 믿지 마세요"로 이미 한 번
+  // 지적됨). 폼을 열어둔 채 자정을 넘기면 로드 시점의 기본값("내일")이 실제로는 "오늘"이나
+  // "어제"가 될 수 있는 등, state가 UI 제약과 어긋날 수 있는 경로가 실재해서 제출 시점에
+  // 다시 검증한다.
+  const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const isValidDateFormat = YMD_RE.test(startDate) && YMD_RE.test(endDate);
+  const todayStr = todayYmd();
+  const startInPast = isValidDateFormat && startDate < todayStr;
+  // API_CONTRACT.md §0.1 — 여행 기간은 1~10일(`end_date >= start_date`, 10일 초과는
+  // INVALID_STRUCTURED_INPUT). dayCount < 1은 종료일이 시작일보다 앞선 경우까지 포함한다.
+  const tooShort = isValidDateFormat && dayCount < 1;
+  const tooLong = isValidDateFormat && dayCount > 10;
+  const dateInvalid = !isValidDateFormat || startInPast || tooShort || tooLong;
+
   const requiredMissingCount = (regionMissing ? 1 : 0) + (relationshipMissing ? 1 : 0);
-  const canSubmit = requiredMissingCount === 0 && !tooMany && !tooLong;
+  const canSubmit = requiredMissingCount === 0 && !tooMany && !dateInvalid;
+
+  const dateHint = !isValidDateFormat
+    ? t("dateInvalid")
+    : startInPast
+      ? t("dateStartInPast")
+      : tooShort
+        ? t("dateEndBeforeStart")
+        : tooLong
+          ? t("dateTooLong")
+          : null;
 
   const missingLabels = useMemo(() => {
     const labels: string[] = [];
@@ -135,8 +158,8 @@ export function MainForm() {
 
         <Section
           label={t("dateLabel")}
-          hint={submitAttempted && tooLong ? t("dateTooLong") : t("dateHint")}
-          hintTone={submitAttempted && tooLong ? "danger" : "default"}
+          hint={submitAttempted && dateHint ? dateHint : t("dateHint")}
+          hintTone={submitAttempted && dateHint ? "danger" : "default"}
         >
           <DateRangeField
             startDate={startDate}
@@ -172,10 +195,10 @@ export function MainForm() {
                 {t("regionHintTooMany", { count: selectedRegions.length })}
               </span>
             </>
-          ) : tooLong ? (
+          ) : dateInvalid && dateHint ? (
             <>
               <AlertCircle size={15} className="text-muted" strokeWidth={1.6} />
-              <span className="text-[12.5px] font-semibold text-muted">{t("dateTooLong")}</span>
+              <span className="text-[12.5px] font-semibold text-muted">{dateHint}</span>
             </>
           ) : requiredMissingCount > 0 ? (
             <>

@@ -73,6 +73,9 @@
     "dateStartLabel": "开始日期",
     "dateEndLabel": "结束日期",
     "dateTooLong": "行程最多可以安排10天",
+    "dateStartInPast": "请选择今天以后的开始日期",
+    "dateEndBeforeStart": "结束日期早于开始日期",
+    "dateInvalid": "请重新选择日期",
     "dateDaysTag": "{count}天行程",
     "dateStartsFrom": "从{date}开始",
     "companionsLabel": "同行人数",
@@ -102,6 +105,7 @@
     "notSaved": "未保存",
     "saved": "已保存",
     "watching": "监测中",
+    "deleted": "已删除的行程",
     "prefTitle": "已参考的喜好",
     "regionReasonPrefix": "",
     "day": "第{n}天",
@@ -134,7 +138,9 @@
     "errorNoCandidateAction": "更改条件",
     "errorNoCandidateHint": "已选择的地区和同行类型会保持不变",
     "watchingTitle": "正在为您关注天气和路况",
-    "watchingSubtitle": "如有变化会立即通知您"
+    "watchingSubtitle": "如有变化会立即通知您",
+    "deletedTitle": "这个行程已被删除",
+    "deletedSubtitle": "已在我的页面中删除，无法再编辑或监测"
   },
   "save": {
     "later": "以后再说",
