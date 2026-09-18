@@ -132,83 +132,153 @@ function masterCategoryOf(poi) {
 }
 
 /**
- * P0(라운드8, 리포트21로 라운드9에서 수정) — 하루 스탑의 과반이 같은 카테고리가 되지 않게
- * 후처리한다. 가중치가 이미 다양성을 만들어주지만, 가중치가 전부 0이거나 한쪽으로 쏠리면
- * 클러스터링 결과가 한 카테고리로 몰릴 수 있다(§1 "가중치가 전부 0일 때" 상자 2번). 기존
- * 스코어링/클러스터링 로직은 건드리지 않고, 각 날짜의 최종 picked(+anchor)만 놓고 과반
- * 카테고리의 최저점 항목을 교체한다.
+ * 핫픽스(진단) — 배포본에서 평창 3일 코스가 nature 0.5/food 0.5 같은 동률 가중치를 줘도
+ * food_local 12/12로 독점되던 원인은 이 함수 내부 로직이 아니라 **호출 지점의 게이트**였다.
+ * 라운드9까지는 `if (allWeightsZero) enforceCategoryDiversity(...)`로 가중치가 전부 0일
+ * 때만 호출했는데, 이 리포트의 재현 입력은 전부 가중치가 있어(0.5/0.5 등) 게이트가 항상
+ * false라 함수 자체가 한 번도 실행되지 않았다(while 루프/replacement 필터는 도달조차
+ * 안 함 — 그 부분은 코드 검토상 방향도 정상이었다). 그래서 이제 이 함수를 **항상 호출**하고,
+ * 가중치가 전부 0인지 여부는 이 함수 안에서 스스로 판단해 두 가지 서로 다른 보정을 건다:
  *
- * 라운드8 구현은 한 번에 스냅샷을 떠서 교체 후보 카테고리 개수를 다시 보지 않았다 — [음식,음식,
- * 문화] 에서 음식 하나를 '가장 점수 높은 다른 카테고리'로 바꿨더니 문화가 [음식,문화,문화]로
- * 새 과반이 됐다(리포트21). 이번엔 스왑 하나마다 그 날의 카테고리 개수를 다시 계산하고,
- * 교체 후보는 "그 카테고리로 바꿔도 그 카테고리 자체가 허용량(maxAllowed)을 넘지 않는" 경우만
- * 고른다. 한 날짜에 동시에 과반인 카테고리는 최대 하나뿐이라(합이 n을 넘을 수 없음) 매 반복
- * 하나씩만 줄여나가면 유한 번(원래 초과분만큼) 안에 끝난다. 그래도 만족할 카테고리가 없으면
- * 그 자리에서 제약을 완화하고 로그만 남긴다 — 코스 생성이 이것 때문에 실패해서는 안 된다.
+ * (A) 하루 과반 제한(라운드8/9, 가중치 전부 0일 때만) — 기존 로직 그대로. 가중치가 하나라도
+ *     있으면 스코어 차이가 진짜 취향 반영이라(예: 온천만 원해서 하루가 onsen_wellness
+ *     일색이어도 의도된 결과, 라운드8에서 확인됨) 이 보정은 건너뛴다.
+ * (B) 코스 전체 최소 1곳 보장(신규, 가중치가 있을 때) — 평창처럼 식당이 읍내에 밀집해
+ *     클러스터링이 지리적으로 가까운 한 카테고리를 통째로 고르면, 동률로 가중치를 준 다른
+ *     카테고리가 코스 전체에서 0곳이 될 수 있다. 하루 단위 과반 제한은 가중치가 있을 때
+ *     적용하지 않지만(위 A), "가중치>0인 카테고리가 코스 전체에서 0곳"은 별개로 항상 피한다.
+ *     각 미보유 카테고리에 대해 그 카테고리의 최고점 미사용 후보 하나를, 코스 전체에서
+ *     "빼도 그 카테고리가 0이 되지 않는" 최저점 스탑과 교체한다. 대체 후보가 없거나
+ *     뺄 곳이 없으면(모든 스탑이 각자 카테고리의 유일한 대표) 제약을 완화하고 로그만 남긴다
+ *     — 코스 생성이 이것 때문에 실패해서는 안 된다.
+ *
+ * 둘 다 난수를 쓰지 않는다(compareByField의 stableTieBreakKey로 동점을 가름) — 같은 입력이면
+ * 항상 같은 결과.
  * @param {Array} dayPlans - {date, anchor, picked, slots} 배열, buildItineraryDays 내부에서 in-place 수정
  * @param {Array} scored - __score가 계산된 전체 후보 풀(이미 festival 날짜 필터 적용됨)
+ * @param {object} weights - 7개 카테고리 가중치(원본 요청값 그대로)
  */
-function enforceCategoryDiversity(dayPlans, scored) {
+function enforceCategoryDiversity(dayPlans, scored, weights) {
   const usedIds = new Set();
   dayPlans.forEach((dp) => {
     if (dp.anchor) usedIds.add(dp.anchor.id);
     dp.picked.forEach((p) => usedIds.add(p.id));
   });
 
-  dayPlans.forEach((dp) => {
-    const currentStops = () => (dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked);
-    const n = currentStops().length;
-    if (n === 0) return;
-    const maxAllowed = Math.floor(n / 2); // 이 값을 넘으면(=count*2 > n) 과반
+  const allWeightsZero = Object.values(weights).every((w) => !w);
 
-    // 한 날짜에 두 카테고리가 동시에 과반일 수는 없다(카운트 합이 n을 넘어야 하므로) — 매 반복
-    // 최신 카운트를 다시 계산해 남은 과반 하나를 찾고, 스왑 하나로 그 카테고리를 정확히 1 줄인다.
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const counts = new Map();
-      currentStops().forEach((p) => {
-        const cat = masterCategoryOf(p);
-        counts.set(cat, (counts.get(cat) || 0) + 1);
-      });
+  // (A) 하루 과반 제한 — 가중치가 전부 0일 때만(라운드8/9 로직, 변경 없음).
+  if (allWeightsZero) {
+    dayPlans.forEach((dp) => {
+      const currentStops = () => (dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked);
+      const n = currentStops().length;
+      if (n === 0) return;
+      const maxAllowed = Math.floor(n / 2); // 이 값을 넘으면(=count*2 > n) 과반
 
-      const violating = [...counts.entries()].find(([cat, count]) => cat !== null && count > maxAllowed);
-      if (!violating) break;
-      const [cat] = violating;
+      // 한 날짜에 두 카테고리가 동시에 과반일 수는 없다(카운트 합이 n을 넘어야 하므로) — 매 반복
+      // 최신 카운트를 다시 계산해 남은 과반 하나를 찾고, 스왑 하나로 그 카테고리를 정확히 1 줄인다.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const counts = new Map();
+        currentStops().forEach((p) => {
+          const cat = masterCategoryOf(p);
+          counts.set(cat, (counts.get(cat) || 0) + 1);
+        });
 
-      const group = currentStops().filter((p) => masterCategoryOf(p) === cat);
-      const victim = group.slice().sort(compareByField('__score')).reverse()[0]; // 최저점
+        const violating = [...counts.entries()].find(([cat, count]) => cat !== null && count > maxAllowed);
+        if (!violating) break;
+        const [cat] = violating;
 
-      // 교체 후보는 (a) 과반 카테고리가 아니고 (b) 바꿔 넣어도 그 카테고리 자체가 허용량을
-      // 넘지 않아야 한다 — 넘으면 반대쪽으로 과반을 옮기는 것일 뿐이다(리포트21 원인).
-      const replacement = scored
-        .filter((p) => !usedIds.has(p.id))
-        .filter((p) => {
-          const rc = masterCategoryOf(p);
-          if (rc === cat) return false;
-          return (counts.get(rc) || 0) + 1 <= maxAllowed;
-        })
-        .filter((p) => isDateEligible(p, dp.date))
-        .sort(compareByField('__score'))[0];
+        const group = currentStops().filter((p) => masterCategoryOf(p) === cat);
+        const victim = group.slice().sort(compareByField('__score')).reverse()[0]; // 최저점
 
-      if (!replacement) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[scoring] ${dp.date.toISOString().slice(0, 10)} 카테고리 다양성 제약 완화 — ` +
-            `"${cat}"를 대체할, 허용량이 남은 다른 카테고리 후보가 없어 그대로 둠`
-        );
-        break; // 이 날짜는 더 못 고친다 — 완화하고 다음 날짜로
+        // 교체 후보는 (a) 과반 카테고리가 아니고 (b) 바꿔 넣어도 그 카테고리 자체가 허용량을
+        // 넘지 않아야 한다 — 넘으면 반대쪽으로 과반을 옮기는 것일 뿐이다(리포트21 원인).
+        const replacement = scored
+          .filter((p) => !usedIds.has(p.id))
+          .filter((p) => {
+            const rc = masterCategoryOf(p);
+            if (rc === cat) return false;
+            return (counts.get(rc) || 0) + 1 <= maxAllowed;
+          })
+          .filter((p) => isDateEligible(p, dp.date))
+          .sort(compareByField('__score'))[0];
+
+        if (!replacement) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[scoring] ${dp.date.toISOString().slice(0, 10)} 카테고리 다양성 제약 완화 — ` +
+              `"${cat}"를 대체할, 허용량이 남은 다른 카테고리 후보가 없어 그대로 둠`
+          );
+          break; // 이 날짜는 더 못 고친다 — 완화하고 다음 날짜로
+        }
+
+        if (dp.anchor && dp.anchor.id === victim.id) {
+          dp.anchor = replacement;
+        } else {
+          const idx = dp.picked.findIndex((p) => p.id === victim.id);
+          if (idx !== -1) dp.picked[idx] = replacement;
+        }
+        usedIds.delete(victim.id);
+        usedIds.add(replacement.id);
+        // 루프 처음으로 돌아가 카운트를 다시 계산 — 이 스왑이 새 과반을 만들지 않았는지도 여기서 확인됨
       }
+    });
+  }
 
-      if (dp.anchor && dp.anchor.id === victim.id) {
-        dp.anchor = replacement;
-      } else {
-        const idx = dp.picked.findIndex((p) => p.id === victim.id);
-        if (idx !== -1) dp.picked[idx] = replacement;
-      }
-      usedIds.delete(victim.id);
-      usedIds.add(replacement.id);
-      // 루프 처음으로 돌아가 카운트를 다시 계산 — 이 스왑이 새 과반을 만들지 않았는지도 여기서 확인됨
+  // (B) 코스 전체 최소 1곳 보장 — 가중치가 있을 때(핫픽스 신규). allWeightsZero면
+  // weightedCategories가 항상 빈 배열이라 이 블록은 자연히 아무 일도 하지 않는다.
+  const weightedCategories = Object.entries(weights)
+    .filter(([, w]) => w > 0)
+    .map(([cat]) => cat);
+
+  weightedCategories.forEach((cat) => {
+    const hasAny = dayPlans.some((dp) => (dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked).some((p) => masterCategoryOf(p) === cat));
+    if (hasAny) return;
+
+    const candidates = scored.filter((p) => !usedIds.has(p.id) && masterCategoryOf(p) === cat).sort(compareByField('__score'));
+    if (candidates.length === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(`[scoring] 가중치>0인 "${cat}" 카테고리 완화 — 이 지역에 후보 자체가 없음`);
+      return;
     }
+
+    // 코스 전체에서 "빼도 그 카테고리가 0이 되지 않는" 스탑 중 최저점을 victim으로 고른다.
+    const totalCounts = new Map();
+    dayPlans.forEach((dp) => {
+      (dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked).forEach((p) => {
+        const c = masterCategoryOf(p);
+        totalCounts.set(c, (totalCounts.get(c) || 0) + 1);
+      });
+    });
+    const removable = [];
+    dayPlans.forEach((dp) => {
+      (dp.anchor ? [dp.anchor, ...dp.picked] : dp.picked).forEach((p) => {
+        if ((totalCounts.get(masterCategoryOf(p)) || 0) > 1) removable.push({ p, dp });
+      });
+    });
+    if (removable.length === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(`[scoring] 가중치>0인 "${cat}" 카테고리 완화 — 모든 스탑이 각자 카테고리의 유일한 대표라 뺄 자리가 없음`);
+      return;
+    }
+    const { p: victim, dp: victimDp } = removable.sort((a, b) => compareByField('__score')(a.p, b.p)).reverse()[0]; // 최저점
+
+    const replacement = candidates.find((p) => isDateEligible(p, victimDp.date));
+    if (!replacement) {
+      // eslint-disable-next-line no-console
+      console.warn(`[scoring] 가중치>0인 "${cat}" 카테고리 완화 — 후보는 있으나 날짜 조건을 만족하는 게 없음`);
+      return;
+    }
+
+    if (victimDp.anchor && victimDp.anchor.id === victim.id) {
+      victimDp.anchor = replacement;
+    } else {
+      const idx = victimDp.picked.findIndex((p) => p.id === victim.id);
+      if (idx !== -1) victimDp.picked[idx] = replacement;
+    }
+    usedIds.delete(victim.id);
+    usedIds.add(replacement.id);
   });
 }
 
@@ -333,15 +403,12 @@ function buildItineraryDays({ pois, weights, activityLevel, startDate, endDate, 
     }
   });
 
-  // P0(라운드8) — 하루 스탑의 과반이 같은 카테고리가 되지 않게 후처리(§1 "가중치가 전부 0일 때"
-  // 상자 2번). 계약 확정 문구: "가중치가 일부라도 0이 아닌 경우엔 기존 스코어링이 그대로
-  // 우선한다 — 1·2는 동점 구간에만 개입한다." 가중치가 하나라도 있으면 스코어 차이 자체가
-  // 진짜 취향 반영이라(예: 온천만 원해서 하루가 onsen_wellness 일색이어도 의도된 결과), 이
-  // 후처리는 가중치가 전부 0일 때만 돌린다 — 그 경우에만 전부 동점이라 개입할 "동점 구간"이다.
-  const allWeightsZero = Object.values(weights).every((w) => !w);
-  if (allWeightsZero) {
-    enforceCategoryDiversity(dayPlans, scored);
-  }
+  // 핫픽스 — 라운드9까지는 가중치가 전부 0일 때만 이 함수를 호출했는데, 그러면
+  // nature 0.5/food 0.5 같은 "가중치는 있지만 동률"인 요청에서 다양성 보정이 통째로
+  // 꺼져 있었다(진단: 호출 자체가 안 됨). 이제 항상 호출하고, 가중치가 전부 0인지는
+  // 함수 안에서 스스로 판단해 하루 과반 제한(전부 0일 때)과 코스 전체 최소 1곳 보장
+  // (가중치가 있을 때)을 나눠 적용한다 — 자세한 설명은 함수 docstring 참고.
+  enforceCategoryDiversity(dayPlans, scored, weights);
 
   // days는 여행 기간 전 일자를 빠짐없이·순서대로 반환한다 — day는 1부터 연속, date는 KST
   // YYYY-MM-DD (API_CONTRACT.md §1 "days 배열 불변식", 라운드3 점검 #4). 라운드2에서 스탑 0개인
