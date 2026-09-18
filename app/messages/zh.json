@@ -240,7 +240,11 @@
     "permissionTitle": "要优先显示\n距离最近的地方吗？",
     "permissionBody": "会以您当前所在位置为基准，按距离远近为您排列医院和保健所。",
     "permissionPrivacy": "位置信息仅在本页面打开期间使用，不会发送或保存到服务器。",
-    "permissionAllow": "允许获取位置"
+    "permissionAllow": "允许获取位置",
+    "locationLoading": "正在确认位置…",
+    "locationDeniedNote": "位置权限被拒绝了。请在浏览器设置中允许访问位置。",
+    "locationUnavailableNote": "无法获取您的位置。",
+    "locationTimeoutNote": "获取位置需要一点时间。"
   },
   "notFound": {
     "title": "未找到该行程",
