@@ -73,6 +73,9 @@
     "dateStartLabel": "Start date",
     "dateEndLabel": "End date",
     "dateTooLong": "Trips can be up to 10 days",
+    "dateStartInPast": "Please choose a start date from today onward",
+    "dateEndBeforeStart": "The end date is before the start date",
+    "dateInvalid": "Please choose the dates again",
     "dateDaysTag": "{count, plural, one {# day trip} other {# day trip}}",
     "dateStartsFrom": "Starting {date}",
     "companionsLabel": "Travelers",
@@ -102,6 +105,7 @@
     "notSaved": "Not saved",
     "saved": "Saved",
     "watching": "Watching",
+    "deleted": "Deleted course",
     "prefTitle": "Preferences reflected",
     "regionReasonPrefix": "",
     "day": "DAY {n}",
@@ -134,7 +138,9 @@
     "errorNoCandidateAction": "Change conditions",
     "errorNoCandidateHint": "We'll keep your region and travel-party choices as they are",
     "watchingTitle": "We're watching the weather and traffic",
-    "watchingSubtitle": "We'll let you know if anything changes"
+    "watchingSubtitle": "We'll let you know if anything changes",
+    "deletedTitle": "This course was deleted",
+    "deletedSubtitle": "It was removed in My Page, so it can no longer be edited or watched"
   },
   "save": {
     "later": "Later",

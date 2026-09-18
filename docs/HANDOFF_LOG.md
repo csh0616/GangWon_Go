@@ -3379,3 +3379,76 @@ PM 세션이 `docs/HANDOFF_LOG.md`를 자기 작업 사본에 이어붙인 뒤 �
     전환**. 무료 크레딧은 10월 초 소진 예상이고 **심사는 제출 이후**입니다. 이때 백엔드가
     죽어 있으면 지금까지 한 작업이 전부 무의미해집니다.
   - **전원**: 마감까지 `scripts/sync` 실행 금지(9/15 항목 참조).
+
+## [2026-09-18 21:40] 프론트팀
+
+- 변경: PM 확정 지시(2차 라운드, 위 항목 참조) 4건 구현. 담당 디렉토리(`/app`, `/components`)만
+  수정, `/server` `/agent` `/scripts/sync` `/docs`(이 파일 제외) 미접근.
+
+  1. **Realtime 구독 실연동 (리포트 03)** — `app/lib/api.ts:33`이 `mock/realtime.ts`의 메모리
+     구독을 그대로 내보내던 것을, `USE_MOCK` 여부로 분기해 실제 Supabase Realtime을 타도록
+     수정. 새 파일 `app/lib/realtime.ts`: `app/lib/supabase.ts`의 기존 클라이언트를 재사용해
+     `channel("alerts:itinerary_id=eq.<id>")`로 `postgres_changes`(INSERT, public.alerts,
+     `filter: itinerary_id=eq.<id>`) 구독. `subscribeAlerts(itineraryId, listener) => unsubscribe`
+     시그니처 그대로 유지, `components/managing/WatchContext.tsx` 호출부 미변경.
+     - `isSupabaseConfigured`가 false이거나 채널 생성이 throw하면 조용히 no-op unsubscribe를
+       반환(알림 때문에 코스 화면이 깨지지 않도록).
+     - raw `alerts` row에는 `message`도 `candidate_poi` 상세도 없어서(컬럼 자체가 없음 —
+       `/api/alerts/trigger`만 서버에서 `pois` 조인으로 채워줌), `proposed_poi_id`는 `pois`
+       테이블을 직접 조회해(공개 read RLS) 보강. 이때 `pois.category`는 TourAPI 원본 코드라
+       그대로 쓰면 안 되고(예전 P0-B에서 고친 "원본 코드가 그대로 노출" 버그 재발 위험)
+       `pois.tags[0]`(마스터 카테고리 태그)을 사용. `previous_poi_id`는 이미 로드된
+       `itineraryJson`에서 `AlertModal`이 직접 찾으므로 보강 불필요. `message`는 `{ko:null,
+       en:null, zh:null}`로 둠 — `AlertModal`이 이미 null 메시지를 정상 렌더링함(부분 저하,
+       비파괴적).
+     - `mock/realtime.ts`는 삭제하지 않고 유지, mock 경로(`triggerAlert()` 데모)는 그대로 동작.
+     - 언마운트/일정 전환 시 `supabase.removeChannel()`로 채널 해제.
+     - **로컬 검증 한계**: `.env.local`에 Supabase 키가 없어(카카오맵 키만 존재) 실제 로그인·
+       WebSocket 연결을 로컬에서 재현 불가 — 이번 라운드도 동일(9/11, 9/14 항목 참조). `tsc`
+       clean, no-op 분기(설정 없을 때 throw 안 함) 코드 경로는 로컬에서 확인. **PM/승현님이
+       배포본에서 로그인 후 저장된 코스 상세 화면 DevTools Network > WS 탭으로 최종 확인
+       필요**. 9/19 오전까지 안 되면 이 항목만 되돌리세요(2~4는 유지).
+
+  2. **삭제한 코스가 "매니징 중"으로 열리는 문제 (리포트 31)** —
+     `app/[locale]/itinerary/[id]/page.tsx`가 날짜만 보고 `detail.status`(`cancelled`)를
+     무시하던 것을 수정. `status === "cancelled"`이면 `watchedId`를 비워 구독을 끄고, 매니징
+     트리거 훅도 조기 return하며, `ResultView`에 `status="cancelled"` `editable={false}`를
+     넘겨 스왑·수정 UI를 감춤. `AlertModal`도 cancelled면 렌더 안 함.
+     `components/result/ResultView.tsx`에 `SavedStatus`에 `"cancelled"` 추가, 칩("삭제된
+     코스")과 하단 안내("삭제된 코스예요 / 마이페이지에서 삭제해 더 이상 수정하거나 지켜볼
+     수 없어요")를 danger 톤으로 추가. ko/en/zh 3개 로케일 모두 `sessionStorage`에 가짜
+     cancelled 레코드를 주입해(로그인 없이 mock 조회 경로 이용) 직접 렌더링 확인 완료 — 칩·
+     하단 문구·스왑 버튼 없음·콘솔 에러 없음 전부 정상.
+
+  3. **날짜 검증 (리포트 17)** — `components/main/MainForm.tsx`가 10일 초과만 보던 것을,
+     제출 시 (a) 형식 유효성 (b) 시작일이 오늘 이후 (c) 1~10일 기간 (d) 종료일이 시작일보다
+     앞서지 않음을 모두 검증하도록 확장(`diffDaysInclusive < 1`이 (d)를 자연히 포함). 위반
+     시 섹션 힌트·하단 안내 문구를 ko/en/zh로 노출, 기존 "지역 너무 많음" 경고와의 우선순위는
+     그대로 유지(지역 경고가 날짜 경고보다 먼저 표시됨 — 기존 동작). 네이티브 input setter로
+     종료일<시작일, 시작일<오늘 두 케이스를 강제해 라이브로 확인 — 각각 올바른 한국어 문구로
+     제출 차단됨을 확인. 이후 유효한 날짜로 복구 시 정상 제출·코스 생성됨을 확인.
+
+  4. **저장 중 이탈 시 강제 이동 (리포트 37)** — `components/save/SaveFlowModal.tsx`의
+     `completeSave()`가 `saveItinerary()` 응답을 기다리는 동안 사용자가 모달을 닫고 다른
+     화면으로 옮겼는지 확인하지 않고 `onSaved()`를 호출하던 것을 수정. `open` prop을 매
+     렌더마다 미러링하는 `openRef`를 추가해, 응답이 온 시점에 `openRef.current`가 false면
+     (이미 닫힘) `onSaved()`도 게스트 임시 데이터 정리도 하지 않고 조용히 return —
+     "요청 취소 ≠ 서버 저장 취소"이므로 화면을 강제로 되돌리지 않고, 실제 저장 성공 여부는
+     마이페이지에서 확인 가능하게 둠.
+     - **로컬 검증 한계**: `completeSave()`는 세션이 이미 있거나(재오픈) OAuth 리다이렉트
+       복귀 후에만 호출되는데, 둘 다 실제 Supabase 로그인이 있어야 재현 가능해 로컬에서
+       완전한 경쟁 조건 재현은 불가. 대신 모달을 열고 "이따가"로 닫는 일반 경로가 콘솔 에러
+       없이 정상 동작함은 라이브로 확인. `openRef` 로직 자체는 코드 리뷰로 재검증(단순
+       ref-mirrors-prop 패턴, effect 타이밍 상 완료된 await 시점에는 최신 open 값 반영됨).
+
+- 회귀 확인: 심사 동선 7단계 중 로그인 불필요한 구간(랜딩 → 폼 작성 → 코스 생성 → 지도/
+  언어전환 ko↔en, 저장 모달 열기/닫기 → 여행 케어 → 마이페이지 비로그인 빈 상태)을 라이브로
+  재확인 — 전부 콘솔 에러 없이 정상. 로그인 필요 구간(실제 저장 완료, 마이페이지 목록·재열기·
+  삭제, Realtime WS)은 로컬 Supabase 키 부재로 여전히 배포본에서만 최종 확인 가능(기존 한계,
+  9/11·9/14 항목과 동일). `npx tsc --noEmit` / `npx eslint .`(기존 무관 경고 3건 외 없음) /
+  `npm run build` 모두 clean.
+- 블로커: 없음. 다만 위 1번(Realtime)과 4번(저장 중 이탈)은 실제 로그인이 있어야만 완전히
+  재현 가능한 시나리오라 로컬에서는 코드 경로 검증까지만 했습니다.
+- 다음 액션: PM/승현님이 배포본에서 시크릿 창으로 검증 체크리스트 1~6번(특히 WS 연결,
+  삭제 후 URL 직접 접근, 저장 직후 모달 닫고 이동) 최종 확인. 9/19 오전까지 Realtime이
+  배포본에서도 안 되면 1번만 되돌리고 2~4는 유지해주세요.

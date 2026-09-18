@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
@@ -55,6 +55,14 @@ export function SaveFlowModal({
   const previewStops = result.itinerary_json.days.flatMap((d) => d.stops).slice(0, 3);
   const totalStops = result.itinerary_json.days.reduce((s, d) => s + d.stops.length, 0);
 
+  // 이 모달은 부모(result/page.tsx)에 항상 마운트돼 있고 open prop으로만 보이고 안 보이고가
+  // 갈린다 — 그래서 컴포넌트 언마운트가 아니라 open의 "지금" 값을 직접 봐야 사용자가 저장
+  // 응답을 기다리다 모달을 닫고 다른 화면으로 옮긴 것을 알 수 있다(외부 검수 리포트 37).
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
   async function completeSave() {
     setSaving(true);
     const saveRes = await saveItinerary({
@@ -64,6 +72,14 @@ export function SaveFlowModal({
       ...meta,
     });
     setSaving(false);
+    if (!openRef.current) {
+      // 응답이 오기 전에 사용자가 이미 모달을 닫고 다른 화면으로 옮겼다(리포트 37) — 요청을
+      // 취소한 게 아니라 응답을 기다리지 않기로 한 것뿐이라 서버 저장 자체는 그대로 진행됐을
+      // 수 있다. 그렇다고 지금 와서 화면을 강제로 옮기거나(onSaved) 게스트 임시 데이터를
+      // 정리하면 안 된다 — 요청 취소가 곧 서버 저장 취소는 아니다. 저장됐다면 마이페이지에서
+      // 확인할 수 있다.
+      return;
+    }
     if (saveRes.data) {
       onSaved(saveRes.data.itinerary_id);
     } else {

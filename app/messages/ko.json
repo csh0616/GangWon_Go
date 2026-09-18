@@ -73,6 +73,9 @@
     "dateStartLabel": "시작일",
     "dateEndLabel": "종료일",
     "dateTooLong": "여행은 최대 10일까지 만들 수 있어요",
+    "dateStartInPast": "시작일은 오늘 이후로 골라주세요",
+    "dateEndBeforeStart": "종료일이 시작일보다 빨라요",
+    "dateInvalid": "날짜를 다시 선택해주세요",
     "dateDaysTag": "{count}일 일정",
     "dateStartsFrom": "{date}부터",
     "companionsLabel": "인원",
@@ -102,6 +105,7 @@
     "notSaved": "저장 안 됨",
     "saved": "저장됨",
     "watching": "지켜보는 중",
+    "deleted": "삭제된 코스",
     "prefTitle": "반영한 취향",
     "regionReasonPrefix": "",
     "day": "DAY {n}",
@@ -134,7 +138,9 @@
     "errorNoCandidateAction": "조건 바꾸기",
     "errorNoCandidateHint": "고른 지역과 동행 유형은 그대로 둘게요",
     "watchingTitle": "날씨 · 교통을 지켜보는 중",
-    "watchingSubtitle": "바뀌면 알려드려요"
+    "watchingSubtitle": "바뀌면 알려드려요",
+    "deletedTitle": "삭제된 코스예요",
+    "deletedSubtitle": "마이페이지에서 삭제해 더 이상 수정하거나 지켜볼 수 없어요"
   },
   "save": {
     "later": "나중에 하기",

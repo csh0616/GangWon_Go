@@ -75,6 +75,7 @@ export default function ItineraryPage() {
   // (TEST_PLAN.md T-003/T-007/T-008). 실서비스 빌드에는 포함되지 않는다.
   useEffect(() => {
     if (process.env.NODE_ENV !== "development" || typeof detail === "string") return;
+    if (detail.status === "cancelled") return; // 삭제된 코스는 매니징 대상이 아니다(리포트 31)
     const firstDay = detail.itinerary_json.days.find((d) => d.stops.length > 0);
     const firstStop = firstDay?.stops[0];
     if (!firstDay || !firstStop) return;
@@ -82,6 +83,15 @@ export default function ItineraryPage() {
       triggerAlert(id, firstDay.day, firstStop.poi_id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail]);
+
+  useEffect(() => {
+    // 삭제된 코스는 Realtime 구독을 꺼서(리포트 31) 이미 지운 코스에 새 알림이 도착하지
+    // 않게 한다 — mypage에서 삭제한 뒤에도 이 페이지에 URL로 직접 들어오면 여전히
+    // "지켜보는 중"으로 보이던 버그의 원인 중 하나였다.
+    if (typeof detail !== "string" && detail.status === "cancelled") {
+      setWatchedId(null);
+    }
+  }, [detail, setWatchedId]);
 
   useEffect(() => {
     // 이전 제안에서 실패했던 에러 표시가 새로 도착한 제안까지 이어 붙지 않게 한다
@@ -134,7 +144,8 @@ export default function ItineraryPage() {
   }
 
   const today = todayYmd();
-  const isWatching = detail.start_date <= today && today <= detail.end_date;
+  const isCancelled = detail.status === "cancelled";
+  const isWatching = !isCancelled && detail.start_date <= today && today <= detail.end_date;
   const excludeIds = detail.itinerary_json.days.flatMap((d) => d.stops.map((s) => s.poi_id));
 
   return (
@@ -155,8 +166,8 @@ export default function ItineraryPage() {
           endDate={detail.end_date}
           companions={detail.companions}
           relationship={detail.relationship}
-          status={isWatching ? "watching" : "saved"}
-          editable
+          status={isCancelled ? "cancelled" : isWatching ? "watching" : "saved"}
+          editable={!isCancelled}
           changedStopId={changedStopId}
           onSwapStop={(day, poiId, region) => {
             const dayObj = detail.itinerary_json.days.find((d) => d.day === day);
@@ -168,7 +179,7 @@ export default function ItineraryPage() {
         />
       </div>
 
-      {pendingAlert && pendingAlert.itinerary_id === id && (
+      {pendingAlert && pendingAlert.itinerary_id === id && !isCancelled && (
         <AlertModal
           alert={pendingAlert}
           itineraryJson={detail.itinerary_json}
