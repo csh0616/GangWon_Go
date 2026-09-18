@@ -9,6 +9,7 @@ const {
   pickTopCandidates,
   dateForDayIndex,
   festivalOverlapsDate,
+  festivalOverlapsRange,
   addDaysToDateString,
   toCandidateShape,
   sanitizeStoredDays,
@@ -86,7 +87,18 @@ router.post('/generate', async (req, res, next) => {
       if (pois.length === 0) {
         throw apiError(404, 'NO_POI_DATA', '사용 가능한 POI 데이터가 없습니다.');
       }
-      finalRegionCodes = selectRegionsForAuto(pois, weights, tripDays);
+      // P0(라운드9, 리포트22) — 지역 선택이 관계/축제 날짜 필터를 적용하기 전의 POI로 점수를
+      // 매기면, 점수만 높고 실제로는 갈 곳이 없는 지역을 고를 수 있다(예: 매칭된 POI가 전부
+      // family_with_kids에서 걸러지는 adult_only, 또는 전부 여행 기간 밖 축제) — 그러면
+      // buildItineraryDays 단계에서 그 지역만 빈 날들이 나오고, 다른 지역엔 갈 곳이 있어도
+      // 사용자에게 빈 코스/NO_CANDIDATE가 도달할 수 있었다. buildItineraryDays가 실제로 쓰는
+      // 것과 같은 "방문 가능한" 기준(relationship + 축제 날짜 겹침)으로 미리 걸러낸 풀로
+      // 점수를 매긴다 — 그래야 후보가 없는 지역은 애초에 선택되지 않는다.
+      const eligiblePoisForSelection = filterByRelationship(pois, relationship).filter((p) => {
+        if (!(p.tags || []).includes('festival_event')) return true;
+        return festivalOverlapsRange(p, startDate, endDate);
+      });
+      finalRegionCodes = selectRegionsForAuto(eligiblePoisForSelection, weights, tripDays);
     } else {
       const missingRegion = regionCodes.find((r) => !pois.some((p) => p.region_code === r));
       if (missingRegion) {
