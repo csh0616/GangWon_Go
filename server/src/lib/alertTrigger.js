@@ -23,6 +23,13 @@ const TRAFFIC_RADIUS_SECONDS = 15 * 60;
 const TRAFFIC_FALLBACK_RADIUS_KM = 10;
 const TIMEOUT_MINUTES = 3;
 
+// traffic 감시 비활성화 플래그(기본 false) — agent의 5분 주기 cron이 매 사이클마다 후보
+// POI 전체(수십~수백 건)에 카카오모빌리티 Directions를 호출해 일일 쿼터(10,000건)를
+// 소진시킨 것이 확인됐다(9/17부터 캡, 이후 코스 생성 이동시간까지 전부 null이 됨). rain은
+// 기상청만 쓰므로 영향 없어 그대로 둔다. 코드는 지우지 않고 플래그로만 끈다 — 켜면 그대로
+// 동작한다. `agent/src/monitor.js`의 checkTraffic 호출도 같은 플래그로 막혀 있다.
+const ENABLE_TRAFFIC_WATCH = process.env.ENABLE_TRAFFIC_WATCH === 'true';
+
 // 라운드5 — 알림 문구를 다국어 키+치환값에서 완성 문장으로 되돌림. app/lib/types.ts의
 // AlertPayload.message가 Localized({ko,en,zh})이고 app/lib/mock/alerts.ts도 완성 문장을 쓰고
 // 있어, 프론트가 이미 이 형태로 화면을 다 만들어뒀다 — {key,params} 방식은 폐기한다
@@ -170,12 +177,18 @@ async function createProposedAlert({ itineraryId, userId, triggerType, condition
   } else if (condition === 'traffic') {
     // 카테고리 조정 아님 — 교체 대상 바로 이전 스탑(없으면 대상 자신) 좌표 기준 15분 이내로 거리 필터 (PRD 3.5절)
     const referenceStop = stopIndex > 0 ? dayEntry.stops[stopIndex - 1] : previousStop;
-    const { withinRange, allFailed } = await filterWithinDuration(referenceStop, candidatePool, TRAFFIC_RADIUS_SECONDS);
-    if (allFailed) {
-      // 카카오모빌리티 API 전체 실패 — Haversine 거리 근사로 폴백 (1주차 점검 #7)
+    if (!ENABLE_TRAFFIC_WATCH) {
+      // 쿼터 소진 방지 — Directions를 후보마다 호출하지 않고 곧장 기존 전체-실패 폴백 경로
+      // (Haversine 근사)로 간다. filterWithinDuration 자체는 그대로 두고 안 부르기만 한다.
       candidatePool = candidatePool.filter((p) => haversineKm(referenceStop, p) <= TRAFFIC_FALLBACK_RADIUS_KM);
     } else {
-      candidatePool = withinRange;
+      const { withinRange, allFailed } = await filterWithinDuration(referenceStop, candidatePool, TRAFFIC_RADIUS_SECONDS);
+      if (allFailed) {
+        // 카카오모빌리티 API 전체 실패 — Haversine 거리 근사로 폴백 (1주차 점검 #7)
+        candidatePool = candidatePool.filter((p) => haversineKm(referenceStop, p) <= TRAFFIC_FALLBACK_RADIUS_KM);
+      } else {
+        candidatePool = withinRange;
+      }
     }
   } else if (condition === 'rain') {
     // 가중치 0이 아니라 후보 자체를 제외 (PRD 3.5절, 1주차 점검 #12)
@@ -301,4 +314,5 @@ module.exports = {
   ALLOWED_TRIGGER_TYPES,
   ALLOWED_CONDITIONS,
   isValidTriggerConditionPair,
+  ENABLE_TRAFFIC_WATCH,
 };

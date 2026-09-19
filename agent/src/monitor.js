@@ -1,7 +1,7 @@
 // PRD 3.5절/3.6절 — 실시간 조건 감시. server/의 alertTrigger.js를 그대로 재사용해 로직 중복을 막는다.
 const path = require('path');
 const { supabaseAdmin } = require(path.join(__dirname, '../../server/src/config/supabaseClient'));
-const { createProposedAlert, dismissExpiredProposals } = require(path.join(__dirname, '../../server/src/lib/alertTrigger'));
+const { createProposedAlert, dismissExpiredProposals, ENABLE_TRAFFIC_WATCH } = require(path.join(__dirname, '../../server/src/lib/alertTrigger'));
 const { getDrivingDurationSeconds } = require(path.join(__dirname, '../../server/src/lib/directions'));
 const { todayKstISO } = require(path.join(__dirname, '../../server/src/lib/time'));
 const { fetchRainStatus } = require('./weather');
@@ -118,8 +118,14 @@ async function scanAndTrigger() {
 
       // eslint-disable-next-line no-await-in-loop
       await checkRain(itinerary, dayEntry);
-      // eslint-disable-next-line no-await-in-loop
-      await checkTraffic(itinerary, dayEntry);
+      // 쿼터 소진 방지(ENABLE_TRAFFIC_WATCH=false가 기본) — checkTraffic을 아예 안 부르면
+      // 그 안의 getDrivingDurationSeconds 호출도, 그 뒤 createProposedAlert가 벌이는
+      // filterWithinDuration(후보 전체 스캔) 호출도 전부 발생하지 않는다. 코드는 그대로 두고
+      // 호출 자체를 건너뛴다 — 플래그를 켜면 다시 동작한다.
+      if (ENABLE_TRAFFIC_WATCH) {
+        // eslint-disable-next-line no-await-in-loop
+        await checkTraffic(itinerary, dayEntry);
+      }
     } catch (err) {
       console.error(`[monitor] itinerary ${itinerary.id} 스캔 중 오류:`, err.message);
     }
