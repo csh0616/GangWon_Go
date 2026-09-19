@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { RefreshCw } from "lucide-react";
 import { pickName, type UiLocale } from "@/app/lib/localized";
@@ -13,6 +13,7 @@ type KakaoBounds = { extend: (latlng: KakaoLatLng) => void };
 type KakaoMap = {
   setCenter: (latlng: KakaoLatLng) => void;
   setBounds: (bounds: KakaoBounds) => void;
+  setLevel: (level: number) => void;
 };
 
 declare global {
@@ -34,6 +35,18 @@ const KAKAO_KEY = process.env.NEXT_PUBLIC_KAKAO_MAP_KEY;
 const SDK_LOAD_TIMEOUT_MS = 5000;
 
 type Status = "loading" | "ready" | "failed";
+
+// effect 2가 매번 다시 계산하는 "이 day를 화면에 어떻게 잡을지"를 fitToCourse()가 그대로
+// 재사용할 수 있게 저장해둔다. 스탑이 2개 이상이면 setBounds, 1개면 setCenter로 갈리는
+// 기존 분기(아래 effect 2)를 그대로 반영 — union으로 both case를 명시해 fitToCourse가
+// setBounds 하나로 억지로 통일하지 않게 한다(단일 스탑에 setBounds를 쓰면 확대 배율이
+// 기존과 달라진다).
+type CourseView = { kind: "bounds"; bounds: KakaoBounds } | { kind: "center"; latlng: KakaoLatLng };
+
+export type MapViewHandle = {
+  panToMyLocation: () => void;
+  fitToCourse: () => void;
+};
 
 /**
  * SDK 로드를 모듈 스코프에 한 번만 캐시해둔다. 이유: 개발 모드의 React Strict Mode는 effect를
@@ -118,21 +131,22 @@ function buildMyLocationEl(): HTMLDivElement {
  * SDK 스크립트/지도 인스턴스는 마운트 시 한 번만 만들고(ref로 유지), day가 바뀌면 마커·경로선만
  * 걷어내고 다시 그린다 — 다중 시군 코스에서 DAY 2가 다른 시군이어도 지도가 그 시군을 따라간다.
  */
-export function MapView({
-  day,
-  onRetry,
-  onMyLocationChange,
-}: {
-  day: Day;
-  onRetry?: () => void;
-  onMyLocationChange?: (hasLocation: boolean) => void;
-}) {
+export const MapView = forwardRef<
+  MapViewHandle,
+  {
+    day: Day;
+    onRetry?: () => void;
+    onMyLocationChange?: (hasLocation: boolean) => void;
+  }
+>(function MapView({ day, onRetry, onMyLocationChange }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<KakaoMap | null>(null);
   const markerOverlaysRef = useRef<KakaoOverlay[]>([]);
   const polylineRef = useRef<KakaoPolyline | null>(null);
   const myLocationOverlayRef = useRef<KakaoOverlay | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const courseViewRef = useRef<CourseView | null>(null);
+  const lastPositionRef = useRef<{ lat: number; lng: number } | null>(null);
 
   const [status, setStatus] = useState<Status>(KAKAO_KEY ? "loading" : "failed");
   const [retryTick, setRetryTick] = useState(0);
@@ -177,7 +191,10 @@ export function MapView({
       polylineRef.current = null;
     }
 
-    if (day.stops.length === 0) return;
+    if (day.stops.length === 0) {
+      courseViewRef.current = null;
+      return;
+    }
 
     const ordered = [...day.stops].sort((a, b) => a.order - b.order);
     const bounds = new kakao.maps.LatLngBounds();
@@ -207,8 +224,11 @@ export function MapView({
       polyline.setMap(map);
       polylineRef.current = polyline;
       map.setBounds(bounds);
+      courseViewRef.current = { kind: "bounds", bounds };
     } else {
-      map.setCenter(new kakao.maps.LatLng(ordered[0].lat, ordered[0].lng));
+      const center = new kakao.maps.LatLng(ordered[0].lat, ordered[0].lng);
+      map.setCenter(center);
+      courseViewRef.current = { kind: "center", latlng: center };
     }
   }, [day, status, locale]);
 
@@ -223,6 +243,9 @@ export function MapView({
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
+        // panToMyLocation()이 되돌아갈 좌표가 없으면 아무 일도 못 하므로 여기 저장해둔다
+        // (오버레이만 그리고 좌표 자체는 버리던 것이 이번 기능의 전제 조건이었다).
+        lastPositionRef.current = { lat: position.coords.latitude, lng: position.coords.longitude };
         const latlng = new kakao.maps.LatLng(position.coords.latitude, position.coords.longitude);
         myLocationOverlayRef.current?.setMap(null);
         const overlay = new kakao.maps.CustomOverlay({ position: latlng, content: buildMyLocationEl(), zIndex: 10 });
@@ -241,10 +264,33 @@ export function MapView({
       if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
       myLocationOverlayRef.current?.setMap(null);
       myLocationOverlayRef.current = null;
+      lastPositionRef.current = null;
       onMyLocationChange?.(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      panToMyLocation() {
+        const map = mapRef.current;
+        const kakao = window.kakao;
+        const pos = lastPositionRef.current;
+        if (!map || !kakao || !pos) return;
+        map.setCenter(new kakao.maps.LatLng(pos.lat, pos.lng));
+        map.setLevel(5);
+      },
+      fitToCourse() {
+        const map = mapRef.current;
+        const view = courseViewRef.current;
+        if (!map || !view) return;
+        if (view.kind === "bounds") map.setBounds(view.bounds);
+        else map.setCenter(view.latlng);
+      },
+    }),
+    []
+  );
 
   if (status === "failed") {
     return (
@@ -277,4 +323,4 @@ export function MapView({
       )}
     </div>
   );
-}
+});

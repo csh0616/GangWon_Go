@@ -9,7 +9,7 @@ import { TravelLeg } from "./TravelLeg";
 import { RegionTravelBanner } from "./RegionTravelBanner";
 import { EmptyDayNotice } from "./EmptyDayNotice";
 import { PrefChips } from "./PrefChips";
-import { MapView } from "./MapView";
+import { MapView, type MapViewHandle } from "./MapView";
 import { localizedText, type UiLocale } from "@/app/lib/localized";
 import { formatDateRange, formatMonthDayWeekday, diffDaysInclusive, todayYmd } from "@/app/lib/date";
 import { buildResultTitle } from "@/app/lib/resultTitle";
@@ -63,6 +63,8 @@ export function ResultView({
   const [expanded, setExpanded] = useState(false);
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const [hasMyLocation, setHasMyLocation] = useState(false);
+  const [isViewingMyLocation, setIsViewingMyLocation] = useState(false);
+  const mapViewRef = useRef<MapViewHandle>(null);
 
   const { days, narration, region_reason } = itineraryJson;
   const dayCount = days.length;
@@ -98,6 +100,14 @@ export function ResultView({
     enabled: dayCount > 1,
     onDayChange: updateSelectedDayIndex,
   });
+
+  // 위치 권한이 나중에 꺼지거나(브라우저 설정 변경) 지도가 실패로 전환되면 배지 자체가
+  // 사라지는데, 그 상태에서 isViewingMyLocation만 true로 남아 있으면 나중에 배지가 다시
+  // 뜰 때 사용자가 누르지도 않은 "코스 보기"부터 보여주게 된다 — 같이 되돌린다.
+  function handleMyLocationChange(has: boolean) {
+    setHasMyLocation(has);
+    if (!has) setIsViewingMyLocation(false);
+  }
 
   function goToDay(index: number) {
     const clamped = Math.max(0, Math.min(dayCount - 1, index));
@@ -242,7 +252,7 @@ export function ResultView({
           z-index: auto)보다도 위에 그려진다. isolate로 새 스택 컨텍스트를 만들어 그 z-index가
           바깥으로 새지 않게 가둔다 */}
       <div className="absolute inset-0 isolate md:left-[480px]">
-        <MapView day={activeDay} onMyLocationChange={setHasMyLocation} />
+        <MapView ref={mapViewRef} day={activeDay} onMyLocationChange={handleMyLocationChange} />
       </div>
 
       {/* DAY 전환 — 지도가 어느 날짜를 보여주는지 표시하고 좌우로 넘길 수 있다 */}
@@ -275,11 +285,31 @@ export function ResultView({
         </div>
       )}
 
+      {/* 내 위치 ↔ 코스 보기 토글 — 모바일 바텀시트(접힌 상태 h-[62%])가 좌하단을 완전히
+          가리므로 모바일에서는 지도가 항상 보이는 우상단에 둔다(DAY 칩이 left-6 top-6이라
+          겹치지 않게 반대쪽). 데스크톱은 기존 좌하단 위치 그대로. MapView 안(지도의 isolate
+          스택 컨텍스트 내부)으로 옮기면 카카오 SDK 내부 레이어의 z-index와 직접 경쟁하게
+          되어 예전에 바텀시트가 지도 뒤로 숨었던 것과 같은 사고가 재발한다 — ResultView
+          쪽에 그대로 둔다. */}
       {hasMyLocation && (
-        <div className="absolute left-6 bottom-6 z-20 hidden items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:left-[504px] md:flex">
+        <button
+          type="button"
+          onClick={() => {
+            if (isViewingMyLocation) {
+              mapViewRef.current?.fitToCourse();
+              setIsViewingMyLocation(false);
+            } else {
+              mapViewRef.current?.panToMyLocation();
+              setIsViewingMyLocation(true);
+            }
+          }}
+          className="absolute right-5 top-6 z-20 flex items-center gap-2.5 rounded-2xl bg-bg px-4 py-3 shadow-lg md:right-auto md:top-auto md:left-[504px] md:bottom-6"
+        >
           <MapPin size={13} className="text-brand" />
-          <span className="text-[13px] font-medium text-muted">{tc("myLocation")}</span>
-        </div>
+          <span className="text-[13px] font-medium text-muted">
+            {isViewingMyLocation ? tc("backToCourse") : tc("myLocation")}
+          </span>
+        </button>
       )}
 
       {/* 데스크톱 좌측 패널 */}
