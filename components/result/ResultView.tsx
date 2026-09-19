@@ -215,18 +215,21 @@ export function ResultView({
     </div>
   );
 
+  // 모바일 하단 padding은 pb-6(24px) 대신 env(safe-area-inset-bottom)까지 고려한다 —
+  // 시트가 뷰포트 바닥까지 닿게 되면 iOS 홈 인디케이터 제스처 영역과 버튼이 겹칠 수
+  // 있다. 데스크톱은 안전영역이 없는 레이아웃이라 md:에서 기존 값을 그대로 둔다.
   const footer = status === "unsaved" && onSave ? (
-    <div className="border-t-0 bg-bg px-5 pb-6 pt-3 md:px-8 md:pb-6 md:pt-3.5">
+    <div className="border-t-0 bg-bg px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3 md:px-8 md:pb-6 md:pt-3.5">
       <p className="mb-3 hidden text-[12.5px] text-muted md:block">{t("saveHint")}</p>
       <Button onClick={onSave}>{t("saveButton")}</Button>
     </div>
   ) : status === "watching" ? (
-    <div className="border-t border-bg-subtle px-5 py-4 md:px-8">
+    <div className="border-t border-bg-subtle px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 md:py-4">
       <p className="text-[12.5px] font-semibold text-ink-soft">{t("watchingTitle")}</p>
       <p className="mt-0.5 text-[12px] text-muted">{t("watchingSubtitle")}</p>
     </div>
   ) : status === "cancelled" ? (
-    <div className="border-t border-bg-subtle px-5 py-4 md:px-8">
+    <div className="border-t border-bg-subtle px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 md:py-4">
       <p className="text-[12.5px] font-semibold text-danger">{t("deletedTitle")}</p>
       <p className="mt-0.5 text-[12px] text-muted">{t("deletedSubtitle")}</p>
     </div>
@@ -310,7 +313,7 @@ export function ResultView({
             <span className="h-1 w-9 rounded-full bg-line" />
           )}
         </button>
-        <div className="overflow-y-auto px-5 pb-2">{header}</div>
+        <div className="shrink-0 px-5 pb-2">{header}</div>
         <div className="h-2 shrink-0 bg-bg-subtler" />
         <div ref={mobileScrollRef} className="flex-grow overflow-y-auto px-5 pt-4">
           {renderDays(mobileDayRefs)}
