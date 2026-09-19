@@ -16,7 +16,12 @@ async function getDrivingDurationSeconds(origin, destination) {
     headers: { Authorization: `KakaoAK ${env.kakaoMobilityApiKey}` },
   });
   if (!res.ok) {
-    throw new Error(`Kakao Mobility Directions API 실패: HTTP ${res.status}`);
+    // 카카오는 400/401/403 등에 이유를 응답 본문(JSON)으로 준다. 본문을 버리고 HTTP 상태
+    // 코드만 로그에 남기면 "잘못된 요청"과 "쿼터 소진"을 구분할 수 없다 — 실측으로 확인:
+    // 400 응답 본문이 항상 {"code":-10,"msg":"API limit has been exceeded."}였다(좌표를
+    // 4쌍 바꿔가며 재현, 전부 동일 — 좌표/파라미터 문제가 아니라 무료 할당량 소진).
+    const body = await res.text().catch(() => '');
+    throw new Error(`Kakao Mobility Directions API 실패: HTTP ${res.status} ${body.slice(0, 300)}`);
   }
   const data = await res.json();
   const route = data.routes && data.routes[0];
