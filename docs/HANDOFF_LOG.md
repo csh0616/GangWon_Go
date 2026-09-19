@@ -3643,3 +3643,106 @@ PM 세션이 `docs/HANDOFF_LOG.md`를 자기 작업 사본에 이어붙인 뒤 �
 - 다음 액션: 배포 후 실제 iPhone Safari/Chrome에서 (a) 결과 화면 하단 버튼이
   홈 인디케이터에 가리지 않는지, (b) 개발자도구 Application > Manifest에서
   이름·아이콘·테마색 인식, (c) "홈 화면에 추가" 프롬프트 노출을 확인해주세요.
+
+## [2026-09-20 11:20] 프론트팀
+
+- 변경: "내 위치" 기능 마무리 — 지도가 코스 스탑 기준으로 화면을 잡다 보니 심사위원이
+  강원 밖(서울 등)에 있으면 파란 점이 화면 밖에 찍혀 권한을 허용해도 아무 변화가 없어
+  보이던 문제, 그리고 배지가 모바일에서 아예 숨겨져 있던 문제를 고쳤습니다. 범위는
+  지시받은 대로 `components/result/MapView.tsx`, `components/result/ResultView.tsx`
+  두 파일과 `app/messages/{ko,en,zh}.json`의 신규 키(`common.backToCourse`)만 —
+  `server/` `agent/` `scripts/` `docs/`(이 파일 제외) 미접근.
+
+  이 세션을 시작할 때 `main`에 이전 세션이 커밋하지 않은 변경(`.gitignore`, PM의
+  `docs/STATUS.md` — `submission/` 관련)이 남아 있었습니다. 지우지 않고
+  `git stash`로 보존한 뒤 `main`을 최신화하고 새 브랜치를 딴 다음 다시
+  `stash pop`으로 작업 트리에 되돌려뒀습니다 — 제 커밋에는 포함하지 않았습니다
+  (`docs/`는 PM 전용이라 그대로 둡니다). 다음 PM 세션이 그 파일들을 커밋하시면 됩니다.
+
+  ### 1) MapView가 지도 이동을 부모에 노출
+
+  `forwardRef` + `useImperativeHandle`로 `panToMyLocation()` / `fitToCourse()` 두
+  메서드를 노출. 지시받은 구현 메모를 그대로 따름:
+  - `watchPosition` 성공 콜백에서 좌표를 `lastPositionRef`에 저장(기존엔 오버레이만
+    그리고 좌표 자체를 버리고 있어서 되돌아갈 값이 없었음). 언마운트/재구독 시
+    `null`로 정리.
+  - effect 2(day 변경 시 마커·경로선 다시 그리는 곳)가 계산하는 값을 `courseViewRef`에
+    저장. 스탑이 2개 이상이면 `{kind:"bounds", bounds}`, 1개면 `{kind:"center",
+    latlng}` — 기존에 `setBounds`/`setCenter`로 갈리던 분기를 그대로 반영하는
+    유니온 타입으로 저장했습니다(지시받은 이름은 `courseBoundsRef`였지만, 단일
+    스탑 케이스까지 억지로 `setBounds`로 밀어넣으면 확대 배율이 기존과 달라져서
+    "setBounds 기본 동작은 건드리지 말라"는 제약과 충돌합니다 — 그래서 두 케이스를
+    구분하는 작은 유니온 타입으로 변경했습니다. 기능은 지시받은 그대로:
+    `fitToCourse()`가 이 값을 읽어 적절한 메서드로 분기).
+  - day가 빈 날짜(stops 0개)로 바뀌면 `courseViewRef`를 `null`로 비워 `fitToCourse()`가
+    아무 일도 안 하게 함(방어적 처리, 명시적 지시는 아니었으나 빈 날짜에서
+    `fitToCourse` 클릭 시 이전 날짜로 튀는 걸 막기 위함).
+  - `panToMyLocation()`은 `map.setCenter()` + `map.setLevel(5)`. `KakaoMap` 타입에
+    `setLevel`을 추가.
+
+  ### 2) 배지 → 토글 버튼, 모바일에도 노출
+
+  `ResultView.tsx`에 `isViewingMyLocation` state와 `mapViewRef`(MapView) 추가.
+  버튼 클릭 시 `isViewingMyLocation`에 따라 `panToMyLocation()`/`fitToCourse()`를
+  호출하고 라벨을 `tc("myLocation")` ↔ `tc("backToCourse")`로 토글. `backToCourse`
+  키를 ko/en/zh `common`에 추가(ko에 있던 `myLocation` 옆). 위치 권한이 나중에
+  꺼지거나 지도가 실패로 전환돼 배지 자체가 사라지는 경우
+  (`onMyLocationChange(false)`) `isViewingMyLocation`도 같이 `false`로 되돌리는
+  핸들러를 추가 — 안 그러면 배지가 나중에 다시 뜰 때 사용자가 누르지도 않은
+  "코스 보기"부터 보이는 상태 불일치가 생깁니다(지시엔 없었지만 상태 일관성을 위해
+  최소한으로 추가).
+
+  ### 3) 배치
+
+  모바일: `right-5 top-6`(DAY 칩이 `left-6 top-6`이라 반대쪽). 데스크톱:
+  `md:left-[504px] md:bottom-6`(기존 위치 그대로) — `md:right-auto md:top-auto`로
+  모바일 좌표를 무효화하고 데스크톱 좌표로 교체. `z-20` 유지, `hidden md:flex`를
+  제거해 모바일에서도 항상 노출. **MapView 밖(ResultView)에 그대로 둠** — 지시받은
+  대로 지도의 `isolate` 스택 안으로 옮기지 않았습니다.
+
+- 검증: `navigator.geolocation.watchPosition`을 서울시청 좌표로 모킹해(실제 OS
+  권한 프롬프트는 자동화 불가) 데스크톱 폭과 375px 양쪽에서 라이브 확인, 콘솔 에러
+  없음.
+  - **데스크톱(수용 기준 1)**: 인제 코스에서 위치 허용(모킹) → 좌하단 "내 위치" 버튼
+    → 클릭 → 지도가 서울로 이동(레벨 5, 서울 도로 확대) + 버튼이 "코스 보기"로 전환
+    → 다시 클릭 → 인제 코스 스탑들이 보이는 원래 화면으로 정확히 복귀 + 버튼이
+    "내 위치"로 복귀. 확인 완료.
+  - **모바일 375px(수용 기준 2)**: 접힌 시트(h-62%)에서 버튼이 우상단에 정상 노출,
+    DAY 전환 칩(좌상단)과 안 겹침, 시트 뒤로 숨지 않음(z-20 유지로 기존 z-index
+    사고 재발 없음) 확인. **펼친 시트(h-full)에서는 지도 자체가 화면에서 사라지므로
+    DAY 전환 칩과 마찬가지로 버튼도 함께 사라짐을 확인** — 이는 지도가 안 보이는
+    상태에서 지도 위 오버레이만 유독 남기지 않는 기존 설계와 일관된 동작이라
+    버그로 보지 않았습니다("시트 뒤에 숨는" 것과는 다른 현상 — 지도 자체가 없으니
+    지도 위 오버레이도 없는 것이 맞습니다).
+  - **권한 거부(수용 기준 3)**: `watchPosition`의 error 콜백을 즉시 호출하도록
+    모킹 → 버튼이 아예 안 뜨고 코스·지도는 정상 표시됨을 확인.
+  - **DAY 전환 후 코스 보기(수용 기준 4)**: DAY 2로 전환 → 내 위치(서울로 이동,
+    버튼 "코스 보기") → 코스 보기 클릭 → **DAY 2**의 두 스탑(필례약수온천·용대리
+    황태마을)이 정확히 보이는 화면으로 복귀함을 확인 — `courseViewRef`를 매
+    day 변경마다 갱신해두고 클릭 시점에 fresh하게 읽으므로 stale bounds로
+    이전 날짜에 맞춰지는 버그 없음.
+  - **ko/en/zh 라벨(수용 기준 5)**: ko는 실제 렌더링으로 "내 위치"/"코스 보기"
+    확인 완료. en/zh는 `app/messages/{en,zh}.json`에 `myLocation`/`backToCourse`
+    키·값이 정확함을 대조 확인했으나, **실제 화면 렌더링은 라이브로 재현하지
+    못했습니다** — 이 브라우저 자동화 환경은 실제 OS 위치 권한이 기본적으로
+    거부돼 있어, 페이지 네비게이션 직후 모킹 스크립트를 주입하는 시점이 항상
+    실제(미모킹) `watchPosition` 최초 호출보다 늦어 버튼 자체가 뜨지 않았습니다
+    (ko에서 성공한 건 이전 페이지에서 이미 모킹이 걸린 상태로 day만 전환했기
+    때문). ko와 en/zh가 완전히 같은 컴포넌트 코드 경로(`tc(...)` 호출만 다름)를
+    타므로 정상 렌더될 것으로 판단하지만, 승현님이 배포본에서 실제로 ko/en/zh
+    전환하며 한 번 더 확인해주시면 좋겠습니다.
+  - **SDK 로드 실패(수용 기준 6)**: 스크립트 태그 생성을 가로채 강제 실패시키는
+    방법도 같은 이유(모킹 주입이 실제 로드 시작보다 항상 늦음)로 라이브 재현에
+    실패했습니다. 대신 코드 검토로 확인: `useImperativeHandle`은 `status ===
+    "failed"` 조기 return보다 위(다른 훅들과 같은 순서)에서 호출되고, 내 위치
+    effect(3번)는 `status !== "ready"`이면 `onMyLocationChange?.(false)`를 호출한
+    뒤 `watchPosition` 자체를 구독하지 않습니다 — 이 가드는 이번 라운드에서
+    손대지 않은 기존 코드라 SDK 로드 실패 시 배지가 안 뜨는 동작은 그대로
+    유지됩니다.
+  - `npx tsc --noEmit` / `npx eslint .`(기존 무관 경고 3건 외 없음) / `npm run build`
+    모두 clean.
+- 블로커: 없음. 5번(en/zh 실제 렌더링)과 6번(SDK 실패)은 이 브라우저 자동화
+  환경의 위치 권한 제약으로 라이브 재현이 안 됐고, 코드 검토로 근거를 남겼습니다.
+- 다음 액션: 배포본에서 ko/en/zh 전환 + 위치 허용 상태에서 버튼 문구, 그리고
+  지도 로드가 느리거나 실패하는 네트워크 환경에서 배지가 안 뜨는지 승현님이
+  한 번 더 확인해주시면 좋겠습니다.
