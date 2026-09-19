@@ -3547,3 +3547,99 @@ PM 세션이 `docs/HANDOFF_LOG.md`를 자기 작업 사본에 이어붙인 뒤 �
     모두 clean
 - 블로커: 없음.
 - 다음 액션: 없음(이 항목은 여기서 완결).
+
+## [2026-09-19 15:40] 프론트팀
+
+- 변경: 모바일 결과 화면 잔여 2건(메타 칩 잘림, 저장 버튼 아래 빈 공간) + PWA manifest
+  추가(서비스워커 제외). 범위는 `components/result/`, `app/`의 레이아웃·메타데이터,
+  `public/` 신규 파일만 — 다른 기능 로직 미접근. 심사 동선 7단계·직전 라운드의
+  모바일 z-index 수정 모두 회귀 없음 확인.
+
+  ### 1) 메타 칩 잘림 (375px) — 실제 원인은 보고된 것과 달랐다
+
+  `components/result/ResultView.tsx`의 모바일 바텀시트 헤더 래퍼
+  (`<div className="overflow-y-auto px-5 pb-2">{header}</div>`)에 `overflow-y-auto`가
+  걸려 있으면, flexbox 스펙상 `overflow`가 `visible`이 아닌 요소의 기본 최소 높이가
+  `auto`(콘텐츠 크기)가 아니라 `0`으로 취급된다. 시트는 `flex flex-col h-[62%]`
+  고정 높이라, 전체 콘텐츠(제목+메타칩+지역이유 배너+내레이션+선호칩)가 62%를
+  넘으면 이 헤더가 `flex-shrink:1`(기본값) 대상이 되어 실제 콘텐츠 높이보다 작게
+  찌그러들고, 잘린 부분은 `overflow-y-auto`가 그냥 감춰버렸다 — 메타 칩 줄이
+  "시트 헤더와 스크롤 영역 경계에 걸쳐" 보인 이유. 로컬에서 홍천·평창 자동매칭
+  코스(지역이유+내레이션 있음)로 실측: 헤더 높이가 63px로 찌그러들어 내레이션
+  텍스트가 문장 중간에서 잘림(`innerText`로 직접 확인).
+  - 수정: 헤더 래퍼에서 `overflow-y-auto`를 빼고 `shrink-0`을 줌 — 항상 콘텐츠
+    전체 높이로 렌더되고, 대신 원래도 스크롤 영역인 DAY 목록(`flex-grow`)이
+    남은 공간을 흡수한다. 같은 코스로 재측정: 헤더 208px로 내레이션 전체 표시,
+    잘림 없음.
+
+  ### 2) 저장 버튼 아래 빈 공간 (375px) — 로컬에서는 재현 안 됨, 그래도 지시대로 수정
+
+  `getBoundingClientRect()`로 실측한 결과 시트(`bottom-0`, `h-[62%]`)는 항상
+  뷰포트 바닥(812px)까지 정확히 닿아 있었고, 풋터(저장 버튼)도 그 아래 접기 토글
+  버튼과 함께 시트 바닥까지 빈틈없이 채워졌다(1일 코스·3일 코스 모두 확인) —
+  즉 `flex-grow`가 정상 동작해 devtools 뷰포트 크기 에뮬레이션에서는 갭이 보이지
+  않았다. 다만 Chrome DevTools의 커스텀 뷰포트 크기 조정은 iOS의
+  `env(safe-area-inset-bottom)`(홈 인디케이터 영역)을 흉내 내지 않으므로, 실제
+  아이폰에서 안전영역만큼 여백이 남거나 반대로 버튼이 인디케이터에 가려지는
+  현상은 이 환경에서 재현이 원천적으로 불가능하다. 지시받은 대로 방어적으로 수정:
+  - 코스 저장/지켜보는 중/삭제됨 3개 풋터 모두 모바일 하단 padding을
+    `pb-6`(24px 고정) → `pb-[max(1.5rem,env(safe-area-inset-bottom))]`로 변경
+    (데스크톱 `md:pb-6`은 그대로 유지, 안전영역과 무관).
+  - **전제 조건**: `env(safe-area-inset-*)`는 `viewport-fit=cover`가 뷰포트
+    메타에 없으면 실제 기기에서도 항상 0으로 계산돼 이 수정 자체가 무의미하다.
+    기존에 `app/[locale]/layout.tsx`에 viewport 메타 설정이 전혀 없어서
+    (Next 16은 `viewport` export가 없으면 기본값만 씀) 새로 `viewport` export를
+    추가하며 `viewportFit: "cover"`를 포함시켰다(§3 PWA 항목과 함께 처리).
+  - **로컬 검증 한계**: 위 이유로 이 항목은 배포본을 실제 iPhone Safari(또는
+    Chrome)에서 "코스 저장" 버튼이 홈 인디케이터에 가리지 않는지 직접 확인
+    부탁드립니다. `tsc`/`eslint`/`build`는 clean이고, devtools 375/390/768px
+    전부 갭 없이 정상입니다(원래도 없었을 가능성이 있어 이 수정으로 인한 회귀도
+    없음).
+
+  ### 3) PWA manifest (서비스워커 제외)
+
+  - `app/manifest.ts` 신규 (`MetadataRoute.Manifest`): name/short_name
+    "GANGWON GO", description 1줄, `start_url: "/ko"`, `display: "standalone"`,
+    `background_color: "#ffffff"`(`globals.css --color-bg`),
+    `theme_color: "#0b7a55"`(`globals.css --color-brand`). 로케일이 3개지만
+    manifest는 하나만 두고 `start_url`을 `/ko`로 고정(지시대로).
+  - 아이콘 3+1종을 `public/`에 신규 생성: `icon-192.png` `icon-512.png`
+    `apple-icon.png`(180×180) `icon-512-maskable.png`(추가 안전영역 포함, `purpose:
+    "maskable"`). 로고 이미지 파일이 프로젝트에 없어(헤더는 텍스트 로고뿐)
+    브랜드색(#0b7a55) 단색 배경 + 흰색 "GG" 텍스트 마크로 새로 제작(`sharp`로
+    SVG→PNG 변환, 저장소에는 PNG만 커밋·중간 스크립트는 커밋하지 않음).
+  - `app/[locale]/layout.tsx`: `metadata.appleWebApp`(capable/title/statusBarStyle),
+    `metadata.icons`(icon 2종 + apple 1종 — `public/`에 있어 Next의
+    `app/icon.png` 자동 인식 규칙 밖이라 명시 연결 필요), 신규 `viewport` export
+    (`viewportFit: "cover"`, `themeColor: "#0b7a55"`, width/initialScale 기본값).
+  - 서비스워커는 지시대로 추가하지 않음.
+
+- 검증: 375×812 / 390(생략, 이전 라운드에서 이미 같은 패턴 확인) / 768×1024 /
+  데스크톱에서 devtools로 라이브 확인, 콘솔 에러 없음.
+  - 375px: 자동매칭(지역이유+내레이션 있음) 코스에서 메타 칩·지역이유·내레이션·
+    선호칩 전부 안 잘리고 표시, 저장 버튼까지 시트 안에 정상 배치 (ko/en/zh
+    3개 로케일 모두 확인)
+  - 375px: 스탑 클릭 → "이 장소 바꾸기" 모달이 시트 위에 정상 표시(헤더 높이
+    변경이 모달 z-계층에 영향 없음 확인)
+  - 768px: 기존 2단 데스크톱 레이아웃 그대로, 콘솔 에러 없음
+  - `fetch()`로 `/icon-192.png` `/icon-512.png` `/icon-512-maskable.png`
+    `/apple-icon.png` `/manifest.webmanifest` 전부 200, `manifest.webmanifest`가
+    `application/manifest+json`으로 서빙됨을 확인
+  - `document.head`에서 `link[rel=manifest]`, `link[rel=apple-touch-icon]`,
+    `link[rel=icon]`×2, `meta[name=theme-color]=#0b7a55`,
+    `meta[name=viewport]`에 `viewport-fit=cover` 포함, `meta[name=
+    mobile-web-app-capable]=yes` 전부 정상 주입 확인
+  - **로컬에서 확인 불가**: 개발자도구 Application 패널의 Manifest 탭 렌더링
+    (탭 UI가 이 브라우저 자동화 환경에는 없음 — 대신 위처럼 `<head>`/네트워크
+    레벨로 같은 내용을 확인), 모바일 Chrome "홈 화면에 추가" 배너 실제 노출
+    (배포된 HTTPS 환경 + 실제 모바일 브라우저가 필요). 매니페스트·아이콘·메타
+    태그 자체는 스펙대로 전부 정상 서빙되는 것까지 확인했습니다 — 배포본에서
+    개발자도구 Application > Manifest 탭과 실제 "홈 화면에 추가" 노출 여부를
+    승현님이 한 번 더 확인해주시면 좋겠습니다.
+  - `npx tsc --noEmit` / `npx eslint .`(기존 무관 경고 3건 외 없음) / `npm run build`
+    모두 clean (`/manifest.webmanifest` 라우트가 빌드 출력에 정상 포함됨 확인)
+- 블로커: 없음. 2번(저장 버튼 하단 여백)과 manifest 홈 화면 추가 배너는 로컬
+  devtools 환경 자체의 한계로 최종 확인이 배포본 실기기 몫으로 남습니다.
+- 다음 액션: 배포 후 실제 iPhone Safari/Chrome에서 (a) 결과 화면 하단 버튼이
+  홈 인디케이터에 가리지 않는지, (b) 개발자도구 Application > Manifest에서
+  이름·아이콘·테마색 인식, (c) "홈 화면에 추가" 프롬프트 노출을 확인해주세요.
