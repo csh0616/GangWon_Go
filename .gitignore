@@ -11,3 +11,6 @@ node_modules/
 next-env.d.ts
 /coverage
 design/
+
+# 공모전 제출 서류 (커밋 제외)
+submission/
